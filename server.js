@@ -89,35 +89,62 @@ watcher.on('add', (filePath) => {
   }
 });
 
+const os = require('os');
+
+let cachedWorkingDccUrl = config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+
+function getCandidateDccUrls() {
+  const list = [];
+  if (config.digicamcontrol?.url) list.push(config.digicamcontrol.url.replace(/\/$/, ''));
+  if (cachedWorkingDccUrl) list.push(cachedWorkingDccUrl.replace(/\/$/, ''));
+  
+  try {
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+      for (const net of ifaces[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          list.push(`http://${net.address}:5513`);
+        }
+      }
+    }
+  } catch (e) {}
+
+  list.push('http://127.0.0.1:5513');
+  list.push('http://localhost:5513');
+
+  return Array.from(new Set(list));
+}
+
 /**
- * Check digiCamControl status
+ * Check digiCamControl status with automatic IP discovery
  */
 async function checkDigiCamControlStatus() {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    const dccUrl = config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+  const candidates = getCandidateDccUrls();
+  for (const testUrl of candidates) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch(`${testUrl}/?CMD=Get_Current_Value&Param=cameraname`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
 
-    // Query camera name
-    const res = await fetch(`${dccUrl}/?CMD=Get_Current_Value&Param=cameraname`, {
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-
-    if (res.ok) {
-      const text = await res.text();
-      const cleanName = text.trim();
-      return {
-        online: true,
-        cameraConnected: cleanName.length > 0 && cleanName !== 'No camera connected' && !cleanName.includes('Error'),
-        cameraName: cleanName || 'Canon EOS Camera',
-        serverUrl: dccUrl
-      };
+      if (res.ok) {
+        const text = await res.text();
+        const cleanName = text.trim();
+        cachedWorkingDccUrl = testUrl;
+        return {
+          online: true,
+          cameraConnected: cleanName.length > 0 && cleanName !== 'No camera connected' && !cleanName.includes('Error'),
+          cameraName: cleanName || 'Canon EOS Camera',
+          serverUrl: testUrl
+        };
+      }
+    } catch (err) {
+      // try next candidate
     }
-    return { online: false, cameraConnected: false, cameraName: null, error: `HTTP ${res.status}` };
-  } catch (err) {
-    return { online: false, cameraConnected: false, cameraName: null, error: err.message };
   }
+  return { online: false, cameraConnected: false, cameraName: null, error: 'Cannot connect to digiCamControl on any IP' };
 }
 
 /**
@@ -200,7 +227,7 @@ app.post('/api/capture', async (req, res) => {
     }
 
     // 2. DIGICAMCONTROL INTEGRATION (Default on Windows Kiosk)
-    const dccUrl = config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+    const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
     console.log(`[Bridge] Sending Shutter Release command to digiCamControl at ${dccUrl}...`);
 
     // Prepare a promise waiting for the new image file
