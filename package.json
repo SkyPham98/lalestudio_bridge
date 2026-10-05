@@ -1,0 +1,25 @@
+{
+  "name": "lalestudio-camera-bridge",
+  "version": "1.0.0",
+  "description": "Local Hardware Camera Bridge for Lalé Studio - Triggers Canon DSLR/Mirrorless cameras, physical shutter & studio strobe flash",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "lalestudio",
+    "canon",
+    "camera-bridge",
+    "photobooth",
+    "digicamcontrol",
+    "edsdk"
+  ],
+  "author": "Lalé Studio",
+  "license": "ISC",
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
