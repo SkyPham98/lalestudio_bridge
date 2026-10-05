@@ -180,6 +180,16 @@ app.get('/api/liveview/start', async (req, res) => {
   }
 });
 
+app.get('/api/liveview/stop', async (req, res) => {
+  const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+  try {
+    await fetch(`${dccUrl}/?CMD=LiveViewWnd_Hide`, { signal: AbortSignal.timeout(3000) });
+    res.json({ success: true, message: 'Đã gửi lệnh tắt Live View (nghỉ cảm biến)' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/liveview/stream', (req, res) => {
   const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
   try {

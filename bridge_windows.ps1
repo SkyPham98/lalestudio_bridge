@@ -351,6 +351,18 @@ try {
             continue
         }
 
+        # 3.1 API LIVEVIEW STOP: /api/liveview/stop
+        if ($rawUrl -match "^/api/liveview/stop") {
+            try {
+                Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Hide" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "[LIVEVIEW] Da gui lenh tat Live View de may anh nghi ngoi ($DccUrl)" -ForegroundColor Yellow
+                Send-JsonResponse -response $response -statusCode 200 -jsonObj @{ success = $true; message = "Live View stopped" }
+            } catch {
+                Send-JsonResponse -response $response -statusCode 500 -jsonObj @{ success = $false; error = $_.Exception.Message }
+            }
+            continue
+        }
+
         # 4. API LIVEVIEW FRAME: /api/liveview
         if ($rawUrl -match "^/api/liveview") {
             try {
