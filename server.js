@@ -170,6 +170,63 @@ app.get('/api/status', async (req, res) => {
   });
 });
 
+app.get('/api/liveview/start', async (req, res) => {
+  const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+  try {
+    await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
+    res.json({ success: true, message: 'Đã gửi lệnh bật Live View' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/liveview/stream', (req, res) => {
+  const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+  try {
+    const targetUrl = new URL('/mjpeg', dccUrl);
+    const proxyReq = http.get(targetUrl, (upstreamRes) => {
+      res.writeHead(upstreamRes.statusCode || 200, {
+        'Content-Type': upstreamRes.headers['content-type'] || 'multipart/x-mixed-replace; boundary=--myboundary',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Access-Control-Allow-Origin': '*',
+        'Pragma': 'no-cache'
+      });
+      upstreamRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => {
+      if (!res.headersSent) {
+        res.status(502).json({ success: false, error: 'Liveview stream not ready. Click Lv button in digiCamControl.' });
+      }
+    });
+
+    req.on('close', () => {
+      proxyReq.destroy();
+    });
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+});
+
+app.get('/api/liveview', async (req, res) => {
+  const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+  try {
+    const upstream = await fetch(`${dccUrl}/liveview.jpg`, { signal: AbortSignal.timeout(2000) });
+    if (upstream.ok) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      const buf = await upstream.arrayBuffer();
+      return res.send(Buffer.from(buf));
+    }
+    res.status(502).send('Liveview not ready. Please click Lv button in digiCamControl.');
+  } catch (err) {
+    res.status(502).send(err.message);
+  }
+});
+
 /**
  * Trigger Physical Camera Shutter & Capture High-Res 24MP Photo
  */

@@ -339,6 +339,51 @@ try {
             continue
         }
 
+        # 3. API LIVEVIEW START: /api/liveview/start
+        if ($rawUrl -match "^/api/liveview/start") {
+            try {
+                Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "[LIVEVIEW] Da gui lenh bat Live View toi digiCamControl ($DccUrl)" -ForegroundColor Green
+                Send-JsonResponse -response $response -statusCode 200 -jsonObj @{ success = $true; message = "Live View started" }
+            } catch {
+                Send-JsonResponse -response $response -statusCode 500 -jsonObj @{ success = $false; error = $_.Exception.Message }
+            }
+            continue
+        }
+
+        # 4. API LIVEVIEW FRAME: /api/liveview
+        if ($rawUrl -match "^/api/liveview") {
+            try {
+                $wc = New-Object System.Net.WebClient
+                $lvBytes = $wc.DownloadData("$DccUrl/liveview.jpg")
+                $response.StatusCode = 200
+                $response.ContentType = "image/jpeg"
+                $response.Headers.Add("Access-Control-Allow-Origin", "*")
+                $response.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate")
+                $response.ContentLength64 = $lvBytes.Length
+                $response.OutputStream.Write($lvBytes, 0, $lvBytes.Length)
+                $response.OutputStream.Close()
+            } catch {
+                $response.StatusCode = 502
+                $response.OutputStream.Close()
+            }
+            continue
+        }
+
+        # 5. API LIVEVIEW STREAM: /api/liveview/stream
+        if ($rawUrl -match "^/api/liveview/stream") {
+            try {
+                $response.StatusCode = 302
+                $response.Headers.Add("Location", "$DccUrl/mjpeg")
+                $response.Headers.Add("Access-Control-Allow-Origin", "*")
+                $response.OutputStream.Close()
+            } catch {
+                $response.StatusCode = 502
+                $response.OutputStream.Close()
+            }
+            continue
+        }
+
         # Route khác
         Send-JsonResponse -response $response -statusCode 404 -jsonObj @{ error = "Not found" }
     }
