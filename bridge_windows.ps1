@@ -343,7 +343,9 @@ try {
         if ($rawUrl -match "^/api/liveview/start") {
             try {
                 Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
-                Write-Host "[LIVEVIEW] Da gui lenh bat Live View toi digiCamControl ($DccUrl)" -ForegroundColor Green
+                Start-Sleep -Milliseconds 400
+                Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "[LIVEVIEW] Da gui lenh bat Live View & danh thuc cam bien (Focus) toi digiCamControl ($DccUrl)" -ForegroundColor Green
                 Send-JsonResponse -response $response -statusCode 200 -jsonObj @{ success = $true; message = "Live View started" }
             } catch {
                 Send-JsonResponse -response $response -statusCode 500 -jsonObj @{ success = $false; error = $_.Exception.Message }

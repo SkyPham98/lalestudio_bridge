@@ -174,7 +174,13 @@ app.get('/api/liveview/start', async (req, res) => {
   const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
   try {
     await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
-    res.json({ success: true, message: 'Đã gửi lệnh bật Live View' });
+    // Wake up Canon R50 sensor with Focus trigger
+    setTimeout(async () => {
+      try {
+        await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
+      } catch (e) {}
+    }, 400);
+    res.json({ success: true, message: 'Đã gửi lệnh bật Live View & đánh thức cảm biến (Focus)' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
