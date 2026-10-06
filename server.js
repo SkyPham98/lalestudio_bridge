@@ -67,7 +67,19 @@ if (!fs.existsSync(absWatchDir)) {
 }
 
 console.log(`[Bridge] Watching folder for new camera photos: ${absWatchDir}`);
-const watcher = chokidar.watch(absWatchDir, {
+
+// Also watch digiCamControl's default Pictures folder as safety net
+const watchDirs = [absWatchDir];
+const userHome = process.env.USERPROFILE || process.env.HOME || '';
+if (userHome) {
+  const dccDefaultDir = path.join(userHome, 'Pictures', 'digiCamControl');
+  if (dccDefaultDir !== absWatchDir) {
+    watchDirs.push(dccDefaultDir);
+    console.log(`[Bridge] Also watching digiCamControl default folder: ${dccDefaultDir}`);
+  }
+}
+
+const watcher = chokidar.watch(watchDirs, {
   ignored: /(^|[\/\\])\../,
   persistent: true,
   ignoreInitial: true,
@@ -80,7 +92,7 @@ const watcher = chokidar.watch(absWatchDir, {
 watcher.on('add', (filePath) => {
   const ext = path.extname(filePath).toLowerCase();
   if (['.jpg', '.jpeg', '.png'].includes(ext)) {
-    console.log(`[Bridge] New high-res photo detected from camera: ${path.basename(filePath)}`);
+    console.log(`[Bridge] New high-res photo detected from camera: ${path.basename(filePath)} (in ${path.dirname(filePath)})`);
     latestFileDetected = filePath;
     lastCapturedFile = filePath;
 
@@ -150,12 +162,63 @@ async function checkDigiCamControlStatus() {
 }
 
 /**
+ * Configure digiCamControl session: Set transfer mode to "Save to PC only"
+ * and session folder to our configured photoSaveDir (e.g. C:\LalePhotos).
+ * This ensures photos land in our watch folder, not digiCamControl's default.
+ */
+let dccSessionConfigured = false;
+async function configureDigiCamControlSession() {
+  const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+  const targetFolder = defaultPhotosDir.replace(/\//g, '\\'); // Ensure Windows-style backslashes
+
+  try {
+    // 1. Set transfer mode to "Save to PC only" (ảnh chỉ truyền về PC, không lưu thẻ nhớ)
+    const transferRes = await fetch(
+      `${dccUrl}/?slc=set&param1=transfer&param2=Save_to_PC_only`,
+      { signal: AbortSignal.timeout(3000) }
+    );
+    const transferText = await transferRes.text();
+    console.log(`[Bridge] Set transfer=Save_to_PC_only: ${transferText.trim()}`);
+
+    // 2. Set session folder to our configured directory (e.g. C:\LalePhotos)
+    const folderRes = await fetch(
+      `${dccUrl}/?slc=set&param1=session.folder&param2=${encodeURIComponent(targetFolder)}`,
+      { signal: AbortSignal.timeout(3000) }
+    );
+    const folderText = await folderRes.text();
+    console.log(`[Bridge] Set session.folder=${targetFolder}: ${folderText.trim()}`);
+
+    dccSessionConfigured = true;
+    console.log(`[Bridge] ✓ digiCamControl configured: Photos will save to ${targetFolder}`);
+    return { success: true, folder: targetFolder, transfer: 'Save_to_PC_only' };
+  } catch (err) {
+    console.warn(`[Bridge] Could not configure digiCamControl session: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+// Auto-configure on startup after a short delay (wait for digiCamControl to be ready)
+setTimeout(async () => {
+  const status = await checkDigiCamControlStatus();
+  if (status.online) {
+    await configureDigiCamControlSession();
+  } else {
+    console.log('[Bridge] digiCamControl not yet online. Session will be configured on first /api/status or /api/capture call.');
+  }
+}, 2000);
+
+/**
  * Health & Status Check Endpoint
  * Used by Room Kiosk to verify bridge & camera status
  */
 app.get('/api/status', async (req, res) => {
   const dccStatus = await checkDigiCamControlStatus();
   
+  // Auto-configure session if not yet done and digiCamControl is online
+  if (dccStatus.online && !dccSessionConfigured) {
+    await configureDigiCamControlSession();
+  }
+
   res.json({
     success: true,
     bridgeOnline: true,
@@ -167,6 +230,7 @@ app.get('/api/status', async (req, res) => {
       source: dccStatus.online ? 'digiCamControl (Port 5513)' : config.mode,
       details: dccStatus
     },
+    sessionConfigured: dccSessionConfigured,
     watchDirectory: absWatchDir,
     lastPhoto: lastCapturedFile ? path.basename(lastCapturedFile) : null
   });
@@ -337,6 +401,12 @@ app.post('/api/capture', async (req, res) => {
 
     // 2. DIGICAMCONTROL INTEGRATION (Default on Windows Kiosk)
     const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+
+    // Ensure session is configured so photos land in our folder (e.g. C:\LalePhotos)
+    if (!dccSessionConfigured) {
+      await configureDigiCamControlSession();
+    }
+
     console.log(`[Bridge] Sending Shutter Release command to digiCamControl at ${dccUrl}...`);
 
     // Prepare a promise waiting for the new image file

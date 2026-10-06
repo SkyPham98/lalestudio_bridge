@@ -119,6 +119,21 @@ $DccUrl = $activeDcc.url
 if ($activeDcc.connected) {
     Write-Host " [OK] DA TIM THAY DIGICAMCONTROL TAI: $DccUrl" -ForegroundColor Green
     Write-Host " [CAMERA] May anh ket noi: $($activeDcc.cameraName)" -ForegroundColor Green
+
+    # Tự động cấu hình session folder và transfer mode
+    try {
+        $targetFolder = $PhotoDir.Replace("/", "\")
+        # 1. Set transfer = Save to PC only
+        $setTransfer = Invoke-RestMethod -Uri "$DccUrl/?slc=set&param1=transfer&param2=Save_to_PC_only" -TimeoutSec 3 -ErrorAction SilentlyContinue
+        Write-Host " [CONFIG] Transfer mode: Save_to_PC_only ($setTransfer)" -ForegroundColor Cyan
+        # 2. Set session folder
+        $encodedFolder = [System.Uri]::EscapeDataString($targetFolder)
+        $setFolder = Invoke-RestMethod -Uri "$DccUrl/?slc=set&param1=session.folder&param2=$encodedFolder" -TimeoutSec 3 -ErrorAction SilentlyContinue
+        Write-Host " [CONFIG] Session folder: $targetFolder ($setFolder)" -ForegroundColor Cyan
+        Write-Host " [OK] Anh chup se luu thang vao: $targetFolder" -ForegroundColor Green
+    } catch {
+        Write-Host " [CANH BAO] Khong the cau hinh session folder: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 } else {
     Write-Host " [THONG BAO] Dang su dung dia chi digiCamControl: $DccUrl" -ForegroundColor Cyan
     Write-Host " [LUU Y] Neu chua mo digiCamControl, hay mo app tren may tinh!" -ForegroundColor Yellow
