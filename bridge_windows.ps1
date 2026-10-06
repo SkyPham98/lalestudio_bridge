@@ -177,6 +177,9 @@ function Handle-OptionsRequest($response) {
     $response.OutputStream.Close()
 }
 
+$globalLvWebClient = New-Object System.Net.WebClient
+$lastLiveViewRevive = 0
+
 try {
     while ($listener.IsListening) {
         $context = $listener.GetContext()
@@ -324,6 +327,14 @@ try {
                         resolution = "6000x4000 (24.2 MP)"
                     }
                     Send-JsonResponse -response $response -statusCode 200 -jsonObj $result
+
+                    # Tự động đánh thức Live View sau khi chụp xong
+                    try {
+                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+                        Start-Sleep -Milliseconds 400
+                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                        Write-Host "[LIVEVIEW] Da tu dong khoi phuc Live View & Focus sau khi chup." -ForegroundColor Green
+                    } catch {}
                     continue
                 } catch {
                     Write-Host "[LOI] Khong doc duoc file anh tu o dia: $($_.Exception.Message)" -ForegroundColor Red
@@ -353,6 +364,13 @@ try {
                         resolution = "Full-Res JPEG"
                     }
                     Send-JsonResponse -response $response -statusCode 200 -jsonObj $result
+
+                    # Tự động đánh thức Live View sau khi chụp qua preview
+                    try {
+                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+                        Start-Sleep -Milliseconds 400
+                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                    } catch {}
                     continue
                 }
             } catch {
@@ -396,10 +414,9 @@ try {
         }
 
         # 4. API LIVEVIEW FRAME: /api/liveview
-        if ($rawUrl -match "^/api/liveview") {
+        if ($rawUrl -match "^/api/liveview(\?|$)") {
             try {
-                $wc = New-Object System.Net.WebClient
-                $lvBytes = $wc.DownloadData("$DccUrl/liveview.jpg")
+                $lvBytes = $globalLvWebClient.DownloadData("$DccUrl/liveview.jpg")
                 $response.StatusCode = 200
                 $response.ContentType = "image/jpeg"
                 $response.Headers.Add("Access-Control-Allow-Origin", "*")
@@ -408,6 +425,15 @@ try {
                 $response.OutputStream.Write($lvBytes, 0, $lvBytes.Length)
                 $response.OutputStream.Close()
             } catch {
+                $nowSec = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                if (($nowSec - $lastLiveViewRevive) -gt 4) {
+                    $lastLiveViewRevive = $nowSec
+                    try {
+                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                        Start-Sleep -Milliseconds 400
+                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                    } catch {}
+                }
                 $response.StatusCode = 502
                 $response.OutputStream.Close()
             }
@@ -417,8 +443,7 @@ try {
         # 5. API LIVEVIEW STREAM: /api/liveview/stream
         if ($rawUrl -match "^/api/liveview/stream") {
             try {
-                $wc = New-Object System.Net.WebClient
-                $lvBytes = $wc.DownloadData("$DccUrl/liveview.jpg")
+                $lvBytes = $globalLvWebClient.DownloadData("$DccUrl/liveview.jpg")
                 $response.StatusCode = 200
                 $response.ContentType = "image/jpeg"
                 $response.Headers.Add("Access-Control-Allow-Origin", "*")

@@ -326,6 +326,19 @@ app.get('/api/liveview/stream', (req, res) => {
   });
 });
 
+let lastAutoLiveViewStart = 0;
+function triggerAutoLiveViewStart(dccUrl) {
+  const now = Date.now();
+  if (now - lastAutoLiveViewStart > 4000) {
+    lastAutoLiveViewStart = now;
+    console.log('[Bridge] Live View appears inactive. Auto-sending LiveViewWnd_Show & LiveView_Focus to digiCamControl...');
+    fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) })
+      .then(() => new Promise(r => setTimeout(r, 400)))
+      .then(() => fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) }))
+      .catch(() => {});
+  }
+}
+
 app.get('/api/liveview', async (req, res) => {
   const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
   try {
@@ -337,8 +350,10 @@ app.get('/api/liveview', async (req, res) => {
       const buf = await upstream.arrayBuffer();
       return res.send(Buffer.from(buf));
     }
-    res.status(502).send('Liveview not ready. Please click Lv button in digiCamControl.');
+    triggerAutoLiveViewStart(dccUrl);
+    res.status(502).send('Liveview not ready. Auto-starting...');
   } catch (err) {
+    triggerAutoLiveViewStart(dccUrl);
     res.status(502).send(err.message);
   }
 });
@@ -457,6 +472,15 @@ app.post('/api/capture', async (req, res) => {
         if (prevRes.ok) {
           const arrayBuffer = await prevRes.arrayBuffer();
           const base64 = `data:image/jpeg;base64,${Buffer.from(arrayBuffer).toString('base64')}`;
+          // Tự động khôi phục Live View sau khi chụp qua preview
+          setTimeout(async () => {
+            try {
+              await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
+              await new Promise(r => setTimeout(r, 400));
+              await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
+            } catch (e) {}
+          }, 300);
+
           return res.json({
             success: true,
             source: 'digiCamControl Preview Feed',
@@ -481,6 +505,16 @@ app.post('/api/capture', async (req, res) => {
       const fileSizeMb = (fileBuffer.length / (1024 * 1024)).toFixed(2);
 
       console.log(`[Bridge] Successfully loaded original photo: ${path.basename(imageFilePath)} (${fileSizeMb} MB, ${Date.now() - startTime}ms)`);
+
+      // Tự động khôi phục Live View và gửi lệnh Focus để Live View tiếp tục chạy mượt mà
+      setTimeout(async () => {
+        try {
+          await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
+          await new Promise(r => setTimeout(r, 400));
+          await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
+          console.log('[Bridge] Live View automatically resumed after capture.');
+        } catch (e) {}
+      }, 300);
 
       return res.json({
         success: true,
