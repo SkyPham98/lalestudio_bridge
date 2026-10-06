@@ -124,8 +124,8 @@ if ($activeDcc.connected) {
     try {
         $targetFolder = $PhotoDir.Replace("/", "\")
         # 1. Set transfer = Save to PC only
-        $setTransfer = Invoke-RestMethod -Uri "$DccUrl/?slc=set&param1=transfer&param2=Save_to_PC_only" -TimeoutSec 3 -ErrorAction SilentlyContinue
-        Write-Host " [CONFIG] Transfer mode: Save_to_PC_only ($setTransfer)" -ForegroundColor Cyan
+        $setTransfer = Invoke-RestMethod -Uri "$DccUrl/?slc=set&param1=transfer&param2=Save_to_PC_and_camera" -TimeoutSec 3 -ErrorAction SilentlyContinue
+        Write-Host " [CONFIG] Transfer mode: Save_to_PC_and_camera ($setTransfer)" -ForegroundColor Cyan
         # 2. Set session folder
         $encodedFolder = [System.Uri]::EscapeDataString($targetFolder)
         $setFolder = Invoke-RestMethod -Uri "$DccUrl/?slc=set&param1=session.folder&param2=$encodedFolder" -TimeoutSec 3 -ErrorAction SilentlyContinue
@@ -359,11 +359,11 @@ try {
                 Write-Host "[FALLBACK] Khong the lay anh tu preview.jpg: $($_.Exception.Message)" -ForegroundColor Yellow
             }
 
-            # Fallback nếu cả 2 cách đều chưa có file
-            Write-Host "[THONG BAO] Khong tim thay file anh moi, tra ve thong bao de Kiosk tu dong chup du phong bang Webcam." -ForegroundColor Yellow
+            # Thất bại: Không nhận được file ảnh sau khi bấm cò
+            Write-Host "[LOI] Khong tim thay file anh moi tu may anh trong C:\LalePhotos." -ForegroundColor Red
             $errResult = @{
                 success = $false
-                message = "Khong nhan duoc file anh tu may anh trong 8 giay"
+                message = "Khong tim thay file anh moi tu may anh Canon trong C:\LalePhotos. Vui long kiem tra the nho/digiCamControl."
             }
             Send-JsonResponse -response $response -statusCode 500 -jsonObj $errResult
             continue

@@ -174,11 +174,11 @@ async function configureDigiCamControlSession() {
   try {
     // 1. Set transfer mode to "Save to PC only" (ảnh chỉ truyền về PC, không lưu thẻ nhớ)
     const transferRes = await fetch(
-      `${dccUrl}/?slc=set&param1=transfer&param2=Save_to_PC_only`,
+      `${dccUrl}/?slc=set&param1=transfer&param2=Save_to_PC_and_camera`,
       { signal: AbortSignal.timeout(3000) }
     );
     const transferText = await transferRes.text();
-    console.log(`[Bridge] Set transfer=Save_to_PC_only: ${transferText.trim()}`);
+    console.log(`[Bridge] Set transfer=Save_to_PC_and_camera: ${transferText.trim()}`);
 
     // 2. Set session folder to our configured directory (e.g. C:\LalePhotos)
     const folderRes = await fetch(
@@ -190,7 +190,7 @@ async function configureDigiCamControlSession() {
 
     dccSessionConfigured = true;
     console.log(`[Bridge] ✓ digiCamControl configured: Photos will save to ${targetFolder}`);
-    return { success: true, folder: targetFolder, transfer: 'Save_to_PC_only' };
+    return { success: true, folder: targetFolder, transfer: 'Save_to_PC_and_camera' };
   } catch (err) {
     console.warn(`[Bridge] Could not configure digiCamControl session: ${err.message}`);
     return { success: false, error: err.message };
