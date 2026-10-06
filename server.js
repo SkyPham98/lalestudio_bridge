@@ -196,34 +196,68 @@ app.get('/api/liveview/stop', async (req, res) => {
   }
 });
 
-app.get('/api/liveview/stream', (req, res) => {
+// Active MJPEG stream clients broadcaster
+const streamClients = new Set();
+let streamInterval = null;
+
+async function broadcastLiveViewFrame() {
+  if (streamClients.size === 0) {
+    if (streamInterval) {
+      clearInterval(streamInterval);
+      streamInterval = null;
+    }
+    return;
+  }
+
   const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
   try {
-    const targetUrl = new URL('/mjpeg', dccUrl);
-    const proxyReq = http.get(targetUrl, (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode || 200, {
-        'Content-Type': upstreamRes.headers['content-type'] || 'multipart/x-mixed-replace; boundary=--myboundary',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Access-Control-Allow-Origin': '*',
-        'Pragma': 'no-cache'
-      });
-      upstreamRes.pipe(res);
-    });
+    const resp = await fetch(`${dccUrl}/liveview.jpg`, { signal: AbortSignal.timeout(900) });
+    if (!resp.ok) return;
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length < 500) return; // Discard partial/broken frames
 
-    proxyReq.on('error', (err) => {
-      if (!res.headersSent) {
-        res.status(502).json({ success: false, error: 'Liveview stream not ready. Click Lv button in digiCamControl.' });
+    const header = `--liveviewboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.length}\r\n\r\n`;
+    for (const clientRes of Array.from(streamClients)) {
+      try {
+        if (!clientRes.writableEnded) {
+          clientRes.write(header);
+          clientRes.write(buf);
+          clientRes.write('\r\n');
+        } else {
+          streamClients.delete(clientRes);
+        }
+      } catch (e) {
+        streamClients.delete(clientRes);
       }
-    });
-
-    req.on('close', () => {
-      proxyReq.destroy();
-    });
-  } catch (err) {
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: err.message });
     }
+  } catch (err) {
+    // Drop frame silently when camera shutter fires or camera is busy
   }
+}
+
+app.get('/api/liveview/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'multipart/x-mixed-replace; boundary=--liveviewboundary',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Connection': 'close',
+    'Access-Control-Allow-Origin': '*',
+    'Pragma': 'no-cache'
+  });
+
+  streamClients.add(res);
+
+  if (!streamInterval) {
+    // Poll digiCamControl at ~30 FPS (33ms)
+    streamInterval = setInterval(broadcastLiveViewFrame, 33);
+  }
+
+  req.on('close', () => {
+    streamClients.delete(res);
+    if (streamClients.size === 0 && streamInterval) {
+      clearInterval(streamInterval);
+      streamInterval = null;
+    }
+  });
 });
 
 app.get('/api/liveview', async (req, res) => {
@@ -317,13 +351,24 @@ app.post('/api/capture', async (req, res) => {
     });
 
     // Send Capture command to digiCamControl
-    // ?CMD=Capture triggers physical shutter + fires hotshoe flash + downloads photo
-    const captureRes = await fetch(`${dccUrl}/?CMD=Capture`, {
-      signal: AbortSignal.timeout(6000)
-    });
-
-    if (!captureRes.ok) {
-      throw new Error(`digiCamControl trả về mã lỗi: ${captureRes.status} ${captureRes.statusText}`);
+    // If Live View is active, try LiveView_Capture first to pause EVF and take photo cleanly
+    let captureRes;
+    try {
+      captureRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
+      if (!captureRes.ok) throw new Error('LiveView_Capture status ' + captureRes.status);
+      console.log('[Bridge] LiveView_Capture sent successfully!');
+    } catch (lvErr) {
+      console.log(`[Bridge] LiveView_Capture note (${lvErr.message}), falling back to standard Capture...`);
+      try {
+        captureRes = await fetch(`${dccUrl}/?CMD=Capture`, { signal: AbortSignal.timeout(6000) });
+        if (!captureRes.ok) throw new Error(`Capture status ${captureRes.status}`);
+      } catch (capErr) {
+        console.log(`[Bridge] Standard Capture failed (${capErr.message}), trying Capture_No_Af (bypass AF lock)...`);
+        captureRes = await fetch(`${dccUrl}/?CMD=Capture_No_Af`, { signal: AbortSignal.timeout(6000) });
+        if (!captureRes.ok) {
+          throw new Error(`digiCamControl trả về mã lỗi: ${captureRes.status} ${captureRes.statusText}`);
+        }
+      }
     }
 
     console.log('[Bridge] Shutter command sent! Camera shutter clicked & flash triggered. Waiting for photo transfer...');

@@ -223,12 +223,27 @@ try {
             $probe = Find-DigiCamControlUrl -ManualUrl $DccUrl
             $DccUrl = $probe.url
 
-            Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl/?CMD=Capture" -ForegroundColor White
+            Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl" -ForegroundColor White
 
             try {
-                $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
-                $triggerSuccess = $true
-                Write-Host "[OK] Da phat lenh Shutter! Man trap co hoc da nhay va Flash Studio da no." -ForegroundColor Green
+                # Thử LiveView_Capture trước (khi đang mở Live View)
+                try {
+                    $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Capture" -TimeoutSec 5 -ErrorAction Stop
+                    $triggerSuccess = $true
+                    Write-Host "[OK] Da phat lenh LiveView_Capture thanh cong! Flash da no." -ForegroundColor Green
+                } catch {
+                    # Fallback 1: Lệnh Capture thông thường
+                    try {
+                        $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
+                        $triggerSuccess = $true
+                        Write-Host "[OK] Da phat lenh Capture tieu chuan! Flash da no." -ForegroundColor Green
+                    } catch {
+                        # Fallback 2: Lệnh Capture_No_Af (bỏ qua khóa nét AF)
+                        $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture_No_Af" -TimeoutSec 6 -ErrorAction Stop
+                        $triggerSuccess = $true
+                        Write-Host "[OK] Da phat lenh Capture_No_Af (bo qua AF)! Flash da no." -ForegroundColor Green
+                    }
+                }
             } catch {
                 Write-Host "[CANH BAO] Khong the ket noi toi $DccUrl ($($_.Exception.Message))" -ForegroundColor Yellow
                 # Thử lại 1 lần nữa với IP quét tự động
@@ -387,9 +402,14 @@ try {
         # 5. API LIVEVIEW STREAM: /api/liveview/stream
         if ($rawUrl -match "^/api/liveview/stream") {
             try {
-                $response.StatusCode = 302
-                $response.Headers.Add("Location", "$DccUrl/mjpeg")
+                $wc = New-Object System.Net.WebClient
+                $lvBytes = $wc.DownloadData("$DccUrl/liveview.jpg")
+                $response.StatusCode = 200
+                $response.ContentType = "image/jpeg"
                 $response.Headers.Add("Access-Control-Allow-Origin", "*")
+                $response.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate")
+                $response.ContentLength64 = $lvBytes.Length
+                $response.OutputStream.Write($lvBytes, 0, $lvBytes.Length)
                 $response.OutputStream.Close()
             } catch {
                 $response.StatusCode = 502
