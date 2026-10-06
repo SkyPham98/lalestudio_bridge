@@ -331,8 +331,14 @@ try {
                     # Tự động đánh thức Live View sau khi chụp xong
                     try {
                         Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
-                        Start-Sleep -Milliseconds 400
+                        Start-Sleep -Milliseconds 300
                         Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                        # Đảm bảo cửa sổ Kiosk Browser luôn ở trên cùng để phím Space / Remote luôn nhận lệnh
+                        try {
+                            $wshell = New-Object -ComObject WScript.Shell
+                            $wshell.AppActivate("Chrome") | Out-Null
+                            $wshell.AppActivate("Edge") | Out-Null
+                        } catch {}
                         Write-Host "[LIVEVIEW] Da tu dong khoi phuc Live View & Focus sau khi chup." -ForegroundColor Green
                     } catch {}
                     continue
@@ -368,8 +374,13 @@ try {
                     # Tự động đánh thức Live View sau khi chụp qua preview
                     try {
                         Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
-                        Start-Sleep -Milliseconds 400
+                        Start-Sleep -Milliseconds 300
                         Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                        try {
+                            $wshell = New-Object -ComObject WScript.Shell
+                            $wshell.AppActivate("Chrome") | Out-Null
+                            $wshell.AppActivate("Edge") | Out-Null
+                        } catch {}
                     } catch {}
                     continue
                 }
