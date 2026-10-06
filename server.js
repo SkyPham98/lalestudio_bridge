@@ -58,7 +58,9 @@ let lastCapturedBase64 = null;
 let latestFileDetected = null;
 let pendingCaptureResolve = null;
 
-const watchTargetDir = config.hotfolder?.watchDir || defaultPhotosDir;
+const watchTargetDir = (config.hotfolder && config.hotfolder.enabled && config.hotfolder.watchDir)
+  ? config.hotfolder.watchDir
+  : defaultPhotosDir;
 const absWatchDir = path.isAbsolute(watchTargetDir) ? watchTargetDir : path.join(__dirname, watchTargetDir);
 if (!fs.existsSync(absWatchDir)) {
   fs.mkdirSync(absWatchDir, { recursive: true });
