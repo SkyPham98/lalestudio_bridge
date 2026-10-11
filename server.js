@@ -4,6 +4,15 @@ const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
 
+// Prevent unexpected process crashes on unhandled errors/rejections
+process.on('uncaughtException', (err) => {
+  console.warn(`[Bridge] ⚠️ Lỗi ngoại lệ được bảo vệ (tránh crash tiến trình): ${err?.message || err}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.warn(`[Bridge] ⚠️ Lỗi Promise Rejection được bảo vệ (tránh crash tiến trình): ${reason?.message || reason}`);
+});
+
 // Load Configuration
 const configPath = path.join(__dirname, 'config.json');
 let config = {
@@ -167,12 +176,17 @@ async function checkDigiCamControlStatus() {
  * This ensures photos land in our watch folder, not digiCamControl's default.
  */
 let dccSessionConfigured = false;
-async function configureDigiCamControlSession() {
+let isConfiguringSession = false;
+
+async function configureDigiCamControlSession(force = false) {
+  if (isConfiguringSession && !force) return { success: false, pending: true };
+  isConfiguringSession = true;
+
   const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
   const targetFolder = defaultPhotosDir.replace(/\//g, '\\'); // Ensure Windows-style backslashes
 
   try {
-    // 1. Set transfer mode to "Save to PC only" (ảnh chỉ truyền về PC, không lưu thẻ nhớ)
+    // 1. Set transfer mode to "Save to PC and camera"
     const transferRes = await fetch(
       `${dccUrl}/?slc=set&param1=transfer&param2=Save_to_PC_and_camera`,
       { signal: AbortSignal.timeout(3000) }
@@ -194,18 +208,70 @@ async function configureDigiCamControlSession() {
   } catch (err) {
     console.warn(`[Bridge] Could not configure digiCamControl session: ${err.message}`);
     return { success: false, error: err.message };
+  } finally {
+    isConfiguringSession = false;
   }
 }
 
-// Auto-configure on startup after a short delay (wait for digiCamControl to be ready)
-setTimeout(async () => {
-  const status = await checkDigiCamControlStatus();
-  if (status.online) {
-    await configureDigiCamControlSession();
-  } else {
-    console.log('[Bridge] digiCamControl not yet online. Session will be configured on first /api/status or /api/capture call.');
+// Trạng thái theo dõi kết nối máy ảnh tự động
+let isCameraConnected = false;
+let lastKnownCameraName = '';
+let isCheckingReconnect = false;
+
+/**
+ * Watchdog tự động phát hiện mất kết nối và kết nối lại từ đầu:
+ * - Khi mất kết nối: không exit, chuyển sang chế độ chờ kết nối lại.
+ * - Khi cắm lại USB / bật lại máy ảnh: tự động dò tìm IP, kết nối lại từ đầu, cấu hình lại session và bật lại Live View.
+ */
+async function monitorAndAutoReconnectCamera() {
+  if (isCheckingReconnect) return;
+  isCheckingReconnect = true;
+
+  try {
+    const status = await checkDigiCamControlStatus();
+
+    if (status.online && status.cameraConnected) {
+      if (!isCameraConnected) {
+        console.log('\n========================================================================');
+        console.log(`[Bridge] 🔄 [KẾT NỐI LẠI THÀNH CÔNG] Đã phát hiện máy ảnh: "${status.cameraName}" tại ${status.serverUrl}`);
+        console.log('[Bridge] Tiến hành thiết lập lại kết nối và cấu hình session từ đầu...');
+        console.log('========================================================================');
+        isCameraConnected = true;
+        lastKnownCameraName = status.cameraName;
+        dccSessionConfigured = false;
+
+        // Cấu hình lại session (thư mục lưu ảnh và transfer mode)
+        await configureDigiCamControlSession(true);
+
+        // Đánh thức Live View & Focus
+        triggerAutoLiveViewStart(status.serverUrl);
+      } else if (!dccSessionConfigured) {
+        await configureDigiCamControlSession();
+      }
+    } else {
+      if (isCameraConnected) {
+        console.warn('\n========================================================================');
+        console.warn(`[Bridge] ⚠️ [MẤT KẾT NỐI] Mất kết nối với máy ảnh! (${status.error || status.cameraName || 'Máy ảnh bị ngắt hoặc tắt nguồn'})`);
+        console.warn('[Bridge] Hệ thống sẽ giữ Bridge hoạt động và tự động kết nối lại ngay khi máy ảnh được cắm lại.');
+        console.warn('========================================================================\n');
+        isCameraConnected = false;
+        dccSessionConfigured = false;
+      }
+    }
+  } catch (err) {
+    if (isCameraConnected) {
+      console.warn(`[Bridge] ⚠️ [MẤT KẾT NỐI] Lỗi kết nối tới digiCamControl: ${err.message}`);
+      isCameraConnected = false;
+      dccSessionConfigured = false;
+    }
+  } finally {
+    isCheckingReconnect = false;
   }
-}, 2000);
+}
+
+// Khởi chạy kiểm tra ban đầu và duy trì watchdog chu kỳ 2.5 giây
+setTimeout(monitorAndAutoReconnectCamera, 1500);
+setInterval(monitorAndAutoReconnectCamera, 2500);
 
 /**
  * Health & Status Check Endpoint
@@ -219,16 +285,26 @@ app.get('/api/status', async (req, res) => {
     await configureDigiCamControlSession();
   }
 
+  if (dccStatus.cameraConnected && !isCameraConnected) {
+    isCameraConnected = true;
+    lastKnownCameraName = dccStatus.cameraName;
+  }
+
   res.json({
     success: true,
     bridgeOnline: true,
-    version: '1.0.0',
+    version: '1.2.0-AutoReconnect',
     mode: config.mode,
     camera: {
       connected: dccStatus.cameraConnected || config.mode === 'mock',
-      name: dccStatus.cameraName || (config.mode === 'mock' ? 'Canon EOS R50 (Simulated)' : 'Chưa nhận diện máy ảnh'),
-      source: dccStatus.online ? 'digiCamControl (Port 5513)' : config.mode,
+      name: dccStatus.cameraName || (config.mode === 'mock' ? 'Canon EOS R50 (Simulated)' : 'Chưa nhận diện máy ảnh (Đang chờ kết nối lại)'),
+      source: dccStatus.online ? `digiCamControl (${dccStatus.serverUrl})` : config.mode,
       details: dccStatus
+    },
+    autoReconnect: {
+      enabled: true,
+      isCameraConnected,
+      lastKnownCameraName
     },
     sessionConfigured: dccSessionConfigured,
     watchDirectory: absWatchDir,
@@ -285,7 +361,7 @@ async function broadcastLiveViewFrame() {
     const header = `--liveviewboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.length}\r\n\r\n`;
     for (const clientRes of Array.from(streamClients)) {
       try {
-        if (!clientRes.writableEnded) {
+        if (!clientRes.writableEnded && !clientRes.destroyed) {
           clientRes.write(header);
           clientRes.write(buf);
           clientRes.write('\r\n');
@@ -297,7 +373,7 @@ async function broadcastLiveViewFrame() {
       }
     }
   } catch (err) {
-    // Drop frame silently when camera shutter fires or camera is busy
+    // Drop frame silently when camera shutter fires or camera is busy/disconnected
   }
 }
 
@@ -311,6 +387,10 @@ app.get('/api/liveview/stream', (req, res) => {
   });
 
   streamClients.add(res);
+
+  res.on('error', () => {
+    streamClients.delete(res);
+  });
 
   if (!streamInterval) {
     // Poll digiCamControl at ~30 FPS (33ms)
@@ -415,6 +495,17 @@ app.post('/api/capture', async (req, res) => {
     }
 
     // 2. DIGICAMCONTROL INTEGRATION (Default on Windows Kiosk)
+    const dccCheck = await checkDigiCamControlStatus();
+    if (!dccCheck.online || !dccCheck.cameraConnected) {
+      console.warn(`[Bridge] Lệnh chụp bị từ chối: Mất kết nối máy ảnh (${dccCheck.error || dccCheck.cameraName || 'Offline'})`);
+      return res.status(503).json({
+        success: false,
+        cameraDisconnected: true,
+        message: 'Máy ảnh Canon chưa được kết nối hoặc bị ngắt kết nối USB. Bridge đang tự động dò tìm và kết nối lại...',
+        elapsedMs: Date.now() - startTime
+      });
+    }
+
     const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
 
     // Ensure session is configured so photos land in our folder (e.g. C:\LalePhotos)
@@ -540,10 +631,10 @@ app.post('/api/capture', async (req, res) => {
 });
 
 // Start Server
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ========================================================================
-🌸 LALÉ STUDIO - HARDWARE CAMERA BRIDGE
+🌸 LALÉ STUDIO - HARDWARE CAMERA BRIDGE (AUTO-RECONNECT)
 ========================================================================
 ✓ Bridge Server running on http://127.0.0.1:${PORT}
 ✓ Mode: ${config.mode.toUpperCase()}
@@ -551,7 +642,12 @@ app.listen(PORT, '0.0.0.0', () => {
 ✓ Photo Watch Folder: ${absWatchDir}
 ✓ Status API: http://127.0.0.1:${PORT}/api/status
 ✓ Trigger API: http://127.0.0.1:${PORT}/api/capture
+✓ Auto-Reconnect: Đang bật (tự động kết nối lại khi cắm lại máy ảnh)
 ========================================================================
 Ready to trigger Canon R50 physical shutter & Studio Flash!
   `);
+});
+
+server.on('error', (err) => {
+  console.error('[Bridge] HTTP Server Error:', err.message);
 });

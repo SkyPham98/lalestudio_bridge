@@ -2,7 +2,7 @@
 title Lale Studio - Hardware Camera Bridge (Canon R50 + Flash)
 color 0b
 echo ========================================================================
-echo  LALE PHOTO STUDIO - HARDWARE CAMERA BRIDGE
+echo  LALE PHOTO STUDIO - HARDWARE CAMERA BRIDGE (AUTO-RECONNECT)
 echo  Dieu khien may anh Canon EOS R50, Man trap co hoc va Den Flash Studio
 echo ========================================================================
 echo.
@@ -14,10 +14,18 @@ if not exist node_modules (
     call npm install
 )
 
+:loop
 echo [INFO] Dang khoi dong Local Camera Bridge tren cong 4000...
 echo [INFO] Vui long dam bao da mo phan mem digiCamControl tren may tinh!
 echo.
 
 node server.js
 
-pause
+echo.
+echo ========================================================================
+echo [CANH BAO] Bridge da bi thoat hoac dung dot ngot!
+echo Dang tu dong khoi dong va ket noi lai tu dau sau 3 giay...
+echo (Neu muon thoat hoan toan, hay dong cua so hoac bam Ctrl + C)
+echo ========================================================================
+timeout /t 3 /nobreak >nul
+goto loop
