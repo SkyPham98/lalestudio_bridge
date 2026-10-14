@@ -387,38 +387,79 @@ while ($true) {
 
                         Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl (Che do: $liveViewSource)" -ForegroundColor White
 
-                        # 1. Phát lệnh chụp: Nếu là HDMI (hoặc không phải USB liveview), dùng CMD=Capture tiêu chuẩn!
-                        if ($liveViewSource -ne "usb") {
+                        # 1. Phát lệnh chụp: ƯU TIÊN 1 qua CameraControlRemoteCmd.exe (Direct IPC - 100% đồng bộ nút bấm GUI)
+                        $possibleCmdPaths = @(
+                            "C:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
+                            "C:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
+                            "D:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
+                            "D:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
+                            "C:\digiCamControl\CameraControlRemoteCmd.exe",
+                            "D:\digiCamControl\CameraControlRemoteCmd.exe"
+                        )
+                        $remoteCmdExe = $possibleCmdPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+                        if ($remoteCmdExe -and ($liveViewSource -ne "usb")) {
+                            Write-Host "[DCC] Tim thay CameraControlRemoteCmd.exe tai: $remoteCmdExe" -ForegroundColor Cyan
+                            Write-Host "[DCC] 🚀 [IPC DIRECT] Dang kich hoat man trap va flash qua CLI..." -ForegroundColor White
                             try {
-                                Write-Host "[DCC] Gui lenh CMD=Capture tieu chuan..." -ForegroundColor White
-                                $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
+                                $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+                                $pinfo.FileName = $remoteCmdExe
+                                $pinfo.Arguments = "/c capture"
+                                $pinfo.RedirectStandardOutput = $true
+                                $pinfo.RedirectStandardError = $true
+                                $pinfo.UseShellExecute = $false
+                                $pinfo.CreateNoWindow = $true
+                                $p = [System.Diagnostics.Process]::Start($pinfo)
+                                $p.WaitForExit(6000) | Out-Null
+                                $cliOut = $p.StandardOutput.ReadToEnd().Trim()
+                                Write-Host "[OK] RemoteCmd da thuc thi: $cliOut" -ForegroundColor Green
                                 $triggerSuccess = $true
-                                Write-Host "[OK] Da phat lenh Capture tieu chuan thanh cong! Flash da no." -ForegroundColor Green
                             } catch {
-                                Write-Host "[CANH BAO] CMD=Capture gap loi ($($_.Exception.Message)), thu CMD=Capture_No_Af (bo qua AF)..." -ForegroundColor Yellow
-                                try {
-                                    $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture_No_Af" -TimeoutSec 6 -ErrorAction Stop
-                                    $triggerSuccess = $true
-                                    Write-Host "[OK] Da phat lenh Capture_No_Af thanh cong! Flash da no." -ForegroundColor Green
-                                } catch {
-                                    Write-Host "[CANH BAO] Thu LiveView_Capture..." -ForegroundColor Yellow
+                                Write-Host "[CANH BAO] RemoteCmd loi: $($_.Exception.Message)" -ForegroundColor Yellow
+                            }
+                        }
+
+                        # ƯU TIÊN 2: Kích hoạt qua HTTP Webserver nếu chưa kích hoạt qua CLI
+                        if (-not $triggerSuccess) {
+                            if ($liveViewSource -ne "usb") {
+                                $captureUrls = @(
+                                    "$DccUrl/?CMD=Capture",
+                                    "$DccUrl/?slc=capture&param1=&param2=",
+                                    "$DccUrl/?CMD=Capture_No_Af",
+                                    "$DccUrl/?slc=CaptureNoAf&param1=&param2="
+                                )
+                                foreach ($capUrl in $captureUrls) {
                                     try {
-                                        $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Capture" -TimeoutSec 5 -ErrorAction SilentlyContinue
+                                        Write-Host "[DCC] Dang gui lenh chup qua HTTP toi: $capUrl" -ForegroundColor White
+                                        $triggerRes = Invoke-RestMethod -Uri $capUrl -TimeoutSec 5 -ErrorAction Stop
+                                        $resStr = if ($triggerRes) { $triggerRes.ToString() } else { "" }
+                                        Write-Host "[DCC] Phan hoi: $resStr" -ForegroundColor Gray
+                                        if ($resStr.ToLower().Contains("not allowed") -or $resStr.ToLower().Contains("disabled")) {
+                                            Write-Host "========================================================================" -ForegroundColor Red
+                                            Write-Host "🚨 [CANH BAO] digiCamControl dang TAT: 'Allow interaction via webserver'!" -ForegroundColor Red
+                                            Write-Host "👉 Vao digiCamControl -> File -> Settings -> Webserver: Tich chon 'Allow interaction via webserver'!" -ForegroundColor Yellow
+                                            Write-Host "========================================================================" -ForegroundColor Red
+                                        } elseif (-not $resStr.ToLower().Contains("error")) {
+                                            $triggerSuccess = $true
+                                            Write-Host "[OK] Da phat lenh chup qua HTTP thanh cong! Flash da no." -ForegroundColor Green
+                                            break
+                                        }
+                                    } catch {
+                                        Write-Host "[CANH BAO] Gui $capUrl gap loi: $($_.Exception.Message)" -ForegroundColor Yellow
+                                    }
+                                }
+                            } else {
+                                # USB Live View mode
+                                try {
+                                    $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Capture" -TimeoutSec 5 -ErrorAction Stop
+                                    $triggerSuccess = $true
+                                    Write-Host "[OK] Da phat lenh LiveView_Capture thanh cong! Flash da no." -ForegroundColor Green
+                                } catch {
+                                    try {
+                                        $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
                                         $triggerSuccess = $true
                                     } catch {}
                                 }
-                            }
-                        } else {
-                            # USB Live View mode
-                            try {
-                                $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Capture" -TimeoutSec 5 -ErrorAction Stop
-                                $triggerSuccess = $true
-                                Write-Host "[OK] Da phat lenh LiveView_Capture thanh cong! Flash da no." -ForegroundColor Green
-                            } catch {
-                                try {
-                                    $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
-                                    $triggerSuccess = $true
-                                } catch {}
                             }
                         }
 

@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
+const { execFile } = require('child_process');
 
 // Prevent unexpected process crashes on unhandled errors/rejections
 process.on('uncaughtException', (err) => {
@@ -438,6 +439,105 @@ app.get('/api/liveview', async (req, res) => {
   }
 });
 
+let cachedRemoteCmdPath = null;
+
+/**
+ * Tìm file thực thi CameraControlRemoteCmd.exe của digiCamControl trên Windows
+ * Tiện ích này cho phép gửi lệnh trực tiếp vào tiến trình CameraControl.exe qua IPC (Named Pipes)
+ * Đồng bộ 100% với việc bấm nút Capture trên giao diện, không bị phụ thuộc cài đặt Webserver
+ */
+function findCameraControlRemoteCmd() {
+  if (cachedRemoteCmdPath && fs.existsSync(cachedRemoteCmdPath)) {
+    return cachedRemoteCmdPath;
+  }
+
+  const candidates = [];
+  if (process.env['ProgramFiles(x86)']) {
+    candidates.push(path.join(process.env['ProgramFiles(x86)'], 'digiCamControl', 'CameraControlRemoteCmd.exe'));
+  }
+  if (process.env['ProgramFiles']) {
+    candidates.push(path.join(process.env['ProgramFiles'], 'digiCamControl', 'CameraControlRemoteCmd.exe'));
+  }
+
+  const drives = ['C', 'D', 'E'];
+  for (const drive of drives) {
+    candidates.push(`${drive}:\\Program Files (x86)\\digiCamControl\\CameraControlRemoteCmd.exe`);
+    candidates.push(`${drive}:\\Program Files\\digiCamControl\\CameraControlRemoteCmd.exe`);
+    candidates.push(`${drive}:\\digiCamControl\\CameraControlRemoteCmd.exe`);
+  }
+
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        cachedRemoteCmdPath = p;
+        return p;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+/**
+ * Kích hoạt màn trập qua CameraControlRemoteCmd.exe
+ */
+function triggerViaRemoteCmd(noAf = false) {
+  const remoteCmdExe = findCameraControlRemoteCmd();
+  if (!remoteCmdExe) return Promise.resolve({ success: false, reason: 'RemoteCmd not found' });
+
+  return new Promise((resolve) => {
+    const cmdArg = noAf ? 'capturenoaf' : 'capture';
+    console.log(`[Bridge] 🚀 [IPC DIRECT] Đang kích hoạt màn trập và flash qua: "${remoteCmdExe}" /c ${cmdArg}`);
+    execFile(remoteCmdExe, ['/c', cmdArg], { timeout: 7000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.warn(`[Bridge] RemoteCmd execution notice: ${err.message}`);
+        return resolve({ success: false, error: err.message });
+      }
+      const out = (stdout || '').trim();
+      console.log(`[Bridge] RemoteCmd response: ${out || 'Executed successfully'}`);
+      return resolve({ success: true, output: out });
+    });
+  });
+}
+
+/**
+ * Kích hoạt màn trập qua HTTP Webserver của digiCamControl
+ */
+async function triggerViaHttp(dccUrl, noAf = false) {
+  const endpoints = noAf
+    ? [
+        `${dccUrl}/?CMD=Capture_No_Af`,
+        `${dccUrl}/?slc=CaptureNoAf&param1=&param2=`
+      ]
+    : [
+        `${dccUrl}/?CMD=Capture`,
+        `${dccUrl}/?slc=capture&param1=&param2=`
+      ];
+
+  for (const url of endpoints) {
+    try {
+      console.log(`[Bridge] Gửi lệnh chụp qua HTTP tới: ${url}`);
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const text = await res.text();
+      console.log(`[Bridge] Phản hồi từ digiCamControl (${url}): "${text.trim().substring(0, 100)}"`);
+
+      const lower = text.toLowerCase();
+      if (lower.includes('not allowed') || lower.includes('disabled')) {
+        console.error('\n' + '='.repeat(70));
+        console.error('🚨 [CẢNH BÁO QUAN TRỌNG TỪ DIGICAMCONTROL]');
+        console.error('digiCamControl đang TẮT tùy chọn "Allow interaction via webserver"!');
+        console.error('👉 Cách bật: Mở digiCamControl -> File -> Settings -> Webserver:');
+        console.error('👉 TÍCH CHỌN ô "Allow interaction via webserver" và bấm OK!');
+        console.error('='.repeat(70) + '\n');
+      } else if (!lower.includes('error') && res.ok) {
+        return { success: true, url, response: text.trim() };
+      }
+    } catch (err) {
+      console.warn(`[Bridge] HTTP trigger error (${url}): ${err.message}`);
+    }
+  }
+  return { success: false };
+}
+
 /**
  * Trigger Physical Camera Shutter & Capture High-Res 24MP Photo
  */
@@ -574,34 +674,48 @@ app.post('/api/capture', async (req, res) => {
     });
 
     // Send Capture command to digiCamControl
-    // When in HDMI mode or default, use standard CMD=Capture (the exact same command that clicking Capture in the GUI uses!)
-    let captureRes;
-    if (liveViewSource !== 'usb') {
-      try {
-        console.log('[Bridge] Sending standard CMD=Capture to digiCamControl...');
-        captureRes = await fetch(`${dccUrl}/?CMD=Capture`, { signal: AbortSignal.timeout(6000) });
-        if (!captureRes.ok) throw new Error(`Capture status ${captureRes.status}`);
-        console.log('[Bridge] CMD=Capture sent successfully! Flash should trigger now.');
-      } catch (capErr) {
-        console.warn(`[Bridge] Standard Capture note (${capErr.message}), trying CMD=Capture_No_Af (bypass AF)...`);
-        try {
-          captureRes = await fetch(`${dccUrl}/?CMD=Capture_No_Af`, { signal: AbortSignal.timeout(6000) });
-          if (!captureRes.ok) throw new Error(`Capture_No_Af status ${captureRes.status}`);
-          console.log('[Bridge] CMD=Capture_No_Af sent successfully!');
-        } catch (noAfErr) {
-          console.warn(`[Bridge] Capture_No_Af note (${noAfErr.message}), falling back to LiveView_Capture...`);
-          captureRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
+    // ƯU TIÊN 1: Gọi trực tiếp CameraControlRemoteCmd.exe (Giao thức IPC đồng bộ nút bấm GUI 100%, không bị phụ thuộc webserver HTTP)
+    let triggered = false;
+    const remoteCmdExe = findCameraControlRemoteCmd();
+    if (remoteCmdExe && liveViewSource !== 'usb') {
+      const cliRes = await triggerViaRemoteCmd(false);
+      if (cliRes.success) {
+        triggered = true;
+        console.log('[Bridge] ✓ Đã kích hoạt màn trập và Flash thành công qua RemoteCmd CLI!');
+      } else {
+        // Thử lại với capturenoaf nếu AF bị kẹt
+        const noAfRes = await triggerViaRemoteCmd(true);
+        if (noAfRes.success) {
+          triggered = true;
+          console.log('[Bridge] ✓ Đã kích hoạt qua RemoteCmd CLI (bỏ qua AF)!');
         }
       }
-    } else {
-      // In USB mode where digiCamControl's LiveView window is active:
-      try {
-        console.log('[Bridge] (USB Mode) Sending LiveView_Capture...');
-        captureRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
-        if (!captureRes.ok) throw new Error('LiveView_Capture status ' + captureRes.status);
-      } catch (lvErr) {
-        console.warn(`[Bridge] LiveView_Capture note (${lvErr.message}), trying standard Capture...`);
-        captureRes = await fetch(`${dccUrl}/?CMD=Capture`, { signal: AbortSignal.timeout(6000) });
+    }
+
+    // ƯU TIÊN 2: Kích hoạt qua HTTP Webserver nếu chưa kích hoạt được bằng CLI
+    if (!triggered) {
+      if (liveViewSource !== 'usb') {
+        console.log('[Bridge] Đang gửi lệnh chụp qua HTTP API tới digiCamControl...');
+        const httpRes = await triggerViaHttp(dccUrl, false);
+        if (httpRes.success) {
+          triggered = true;
+          console.log('[Bridge] ✓ Gửi lệnh chụp qua HTTP thành công!');
+        } else {
+          console.log('[Bridge] Thử lại HTTP API ở chế độ CaptureNoAf (bỏ qua AF)...');
+          const noAfHttp = await triggerViaHttp(dccUrl, true);
+          if (noAfHttp.success) triggered = true;
+        }
+      } else {
+        // In USB mode where digiCamControl's LiveView window is active:
+        try {
+          console.log('[Bridge] (USB Mode) Sending LiveView_Capture...');
+          const lvRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
+          if (!lvRes.ok) throw new Error('LiveView_Capture status ' + lvRes.status);
+          triggered = true;
+        } catch (lvErr) {
+          console.warn(`[Bridge] LiveView_Capture note (${lvErr.message}), trying standard Capture...`);
+          await triggerViaHttp(dccUrl, false);
+        }
       }
     }
 
