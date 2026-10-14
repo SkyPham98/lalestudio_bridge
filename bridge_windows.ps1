@@ -487,6 +487,7 @@ while ($true) {
                                 $triggerSuccess = $true
                             } catch {
                                 Write-Host "[CANH BAO] RemoteCmd loi: $($_.Exception.Message)" -ForegroundColor Yellow
+                            }
                         }
 
                         # ƯU TIÊN 2: Kích hoạt qua HTTP Webserver nếu chưa kích hoạt qua CLI
