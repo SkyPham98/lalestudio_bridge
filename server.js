@@ -117,30 +117,95 @@ const os = require('os');
 
 let cachedWorkingDccUrl = config.digicamcontrol?.url || 'http://127.0.0.1:5513';
 
+let cachedRemoteCmdPath = null;
+
+/**
+ * Tìm file thực thi CameraControlRemoteCmd.exe của digiCamControl trên Windows
+ * Tiện ích này cho phép gửi lệnh trực tiếp vào tiến trình CameraControl.exe qua IPC (Named Pipes)
+ * Đồng bộ 100% với việc bấm nút Capture trên giao diện, không bị phụ thuộc cài đặt Webserver
+ */
+function findCameraControlRemoteCmd() {
+  if (cachedRemoteCmdPath && fs.existsSync(cachedRemoteCmdPath)) {
+    return cachedRemoteCmdPath;
+  }
+
+  // 1. Dò tìm từ tiến trình CameraControl.exe đang chạy
+  try {
+    const stdout = require('child_process').execSync(
+      'powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \\"Name = \'CameraControl.exe\'\\").ExecutablePath"',
+      { timeout: 2000, stdio: ['pipe', 'pipe', 'ignore'] }
+    ).toString().trim();
+    if (stdout && fs.existsSync(stdout)) {
+      const candidate = path.join(path.dirname(stdout), 'CameraControlRemoteCmd.exe');
+      if (fs.existsSync(candidate)) {
+        cachedRemoteCmdPath = candidate;
+        return candidate;
+      }
+    }
+  } catch (e) {}
+
+  // 2. Dò tìm trong các thư mục cài đặt tiêu chuẩn
+  const candidates = [];
+  if (process.env['ProgramFiles(x86)']) {
+    candidates.push(path.join(process.env['ProgramFiles(x86)'], 'digiCamControl', 'CameraControlRemoteCmd.exe'));
+  }
+  if (process.env['ProgramFiles']) {
+    candidates.push(path.join(process.env['ProgramFiles'], 'digiCamControl', 'CameraControlRemoteCmd.exe'));
+  }
+
+  const drives = ['C', 'D', 'E'];
+  for (const drive of drives) {
+    candidates.push(`${drive}:\\Program Files (x86)\\digiCamControl\\CameraControlRemoteCmd.exe`);
+    candidates.push(`${drive}:\\Program Files\\digiCamControl\\CameraControlRemoteCmd.exe`);
+    candidates.push(`${drive}:\\digiCamControl\\CameraControlRemoteCmd.exe`);
+  }
+
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        cachedRemoteCmdPath = p;
+        return p;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function isDigiCamControlProcessRunning() {
+  try {
+    const stdout = require('child_process').execSync(
+      'powershell -NoProfile -Command "Get-Process -Name CameraControl -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"',
+      { timeout: 1500, stdio: ['pipe', 'pipe', 'ignore'] }
+    ).toString().trim();
+    return Boolean(stdout);
+  } catch (e) {
+    return false;
+  }
+}
+
 function getCandidateDccUrls() {
   const list = [];
-  if (config.digicamcontrol?.url) list.push(config.digicamcontrol.url.replace(/\/$/, ''));
+  list.push('http://127.0.0.1:5513');
+  list.push('http://localhost:5513');
   if (cachedWorkingDccUrl) list.push(cachedWorkingDccUrl.replace(/\/$/, ''));
+  if (config.digicamcontrol?.url) list.push(config.digicamcontrol.url.replace(/\/$/, ''));
   
   try {
     const ifaces = os.networkInterfaces();
     for (const name of Object.keys(ifaces)) {
       for (const net of ifaces[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
+        if (net.family === 'IPv4' && !net.internal && net.address !== '127.0.0.1') {
           list.push(`http://${net.address}:5513`);
         }
       }
     }
   } catch (e) {}
 
-  list.push('http://127.0.0.1:5513');
-  list.push('http://localhost:5513');
-
   return Array.from(new Set(list));
 }
 
 /**
- * Check digiCamControl status with automatic IP discovery
+ * Check digiCamControl status with automatic IP discovery and process fallback
  */
 async function checkDigiCamControlStatus() {
   const candidates = getCandidateDccUrls();
@@ -161,13 +226,26 @@ async function checkDigiCamControlStatus() {
           online: true,
           cameraConnected: cleanName.length > 0 && cleanName !== 'No camera connected' && !cleanName.includes('Error'),
           cameraName: cleanName || 'Canon EOS Camera',
-          serverUrl: testUrl
+          serverUrl: testUrl,
+          method: 'http'
         };
       }
     } catch (err) {
       // try next candidate
     }
   }
+
+  // Fallback: Kiểm tra xem tiến trình CameraControl.exe có đang chạy không
+  if (isDigiCamControlProcessRunning() || findCameraControlRemoteCmd()) {
+    return {
+      online: true,
+      cameraConnected: true,
+      cameraName: 'Canon EOS Camera (via digiCamControl Process)',
+      serverUrl: cachedWorkingDccUrl || 'http://127.0.0.1:5513',
+      method: 'ipc_process'
+    };
+  }
+
   return { online: false, cameraConnected: false, cameraName: null, error: 'Cannot connect to digiCamControl on any IP' };
 }
 
@@ -439,43 +517,6 @@ app.get('/api/liveview', async (req, res) => {
   }
 });
 
-let cachedRemoteCmdPath = null;
-
-/**
- * Tìm file thực thi CameraControlRemoteCmd.exe của digiCamControl trên Windows
- * Tiện ích này cho phép gửi lệnh trực tiếp vào tiến trình CameraControl.exe qua IPC (Named Pipes)
- * Đồng bộ 100% với việc bấm nút Capture trên giao diện, không bị phụ thuộc cài đặt Webserver
- */
-function findCameraControlRemoteCmd() {
-  if (cachedRemoteCmdPath && fs.existsSync(cachedRemoteCmdPath)) {
-    return cachedRemoteCmdPath;
-  }
-
-  const candidates = [];
-  if (process.env['ProgramFiles(x86)']) {
-    candidates.push(path.join(process.env['ProgramFiles(x86)'], 'digiCamControl', 'CameraControlRemoteCmd.exe'));
-  }
-  if (process.env['ProgramFiles']) {
-    candidates.push(path.join(process.env['ProgramFiles'], 'digiCamControl', 'CameraControlRemoteCmd.exe'));
-  }
-
-  const drives = ['C', 'D', 'E'];
-  for (const drive of drives) {
-    candidates.push(`${drive}:\\Program Files (x86)\\digiCamControl\\CameraControlRemoteCmd.exe`);
-    candidates.push(`${drive}:\\Program Files\\digiCamControl\\CameraControlRemoteCmd.exe`);
-    candidates.push(`${drive}:\\digiCamControl\\CameraControlRemoteCmd.exe`);
-  }
-
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) {
-        cachedRemoteCmdPath = p;
-        return p;
-      }
-    } catch (e) {}
-  }
-  return null;
-}
 
 /**
  * Kích hoạt màn trập qua CameraControlRemoteCmd.exe

@@ -48,16 +48,73 @@ Write-Host "====================================================================
 Write-Host " [INFO] Cong Bridge Kiosk: http://127.0.0.1:$Port" -ForegroundColor Yellow
 Write-Host " [INFO] Thu muc luu anh:   $PhotoDir" -ForegroundColor Yellow
 
-# Hàm tự động dò tìm IP của digiCamControl
+[System.Net.WebRequest]::DefaultWebProxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+
+# Hàm tìm kiếm tiện ích CameraControlRemoteCmd.exe (IPC Direct)
+function Get-DccRemoteCmdPath {
+    # 1. Tìm từ tiến trình CameraControl đang chạy trong Windows
+    try {
+        $cimProc = Get-CimInstance Win32_Process -Filter "Name = 'CameraControl.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cimProc -and $cimProc.ExecutablePath) {
+            $dir = [System.IO.Path]::GetDirectoryName($cimProc.ExecutablePath)
+            $exe = Join-Path $dir "CameraControlRemoteCmd.exe"
+            if (Test-Path $exe) { return $exe }
+        }
+    } catch {}
+
+    try {
+        $proc = Get-Process -Name "CameraControl" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($proc -and $proc.Path) {
+            $dir = [System.IO.Path]::GetDirectoryName($proc.Path)
+            $exe = Join-Path $dir "CameraControlRemoteCmd.exe"
+            if (Test-Path $exe) { return $exe }
+        }
+    } catch {}
+
+    # 2. Tìm qua các đường dẫn cài đặt tiêu chuẩn
+    $candidates = @(
+        "C:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
+        "C:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
+        "D:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
+        "D:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
+        "C:\digiCamControl\CameraControlRemoteCmd.exe",
+        "D:\digiCamControl\CameraControlRemoteCmd.exe"
+    )
+    foreach ($cand in $candidates) {
+        if (Test-Path $cand) { return $cand }
+    }
+
+    # 3. Tìm qua Registry
+    try {
+        $regPath = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\CameraControl.exe" -ErrorAction SilentlyContinue)."(default)"
+        if ($regPath) {
+            $dir = [System.IO.Path]::GetDirectoryName($regPath)
+            $exe = Join-Path $dir "CameraControlRemoteCmd.exe"
+            if (Test-Path $exe) { return $exe }
+        }
+    } catch {}
+
+    return $null
+}
+
+$global:RemoteCmdExe = Get-DccRemoteCmdPath
+if ($global:RemoteCmdExe) {
+    Write-Host " [OK] TIM THAY TIEN ICH CHUP TRUC TIEP: $global:RemoteCmdExe" -ForegroundColor Green
+} else {
+    Write-Host " [CHU Y] Chua phat hien CameraControlRemoteCmd.exe. Se tu dong do tim khi digiCamControl khoi chay." -ForegroundColor Yellow
+}
+
+# Hàm tự động dò tìm IP hoặc tiến trình của digiCamControl
 function Find-DigiCamControlUrl {
     param ([string]$ManualUrl)
 
     $urlsToTest = [System.Collections.Generic.List[string]]::new()
+    $urlsToTest.Add("http://127.0.0.1:5513")
+    $urlsToTest.Add("http://localhost:5513")
     if ($ManualUrl -and $ManualUrl.Trim().Length -gt 0) { 
         $urlsToTest.Add($ManualUrl.Trim().TrimEnd('/')) 
     }
 
-    # 1. Thêm các IP mạng nội bộ của máy (ví dụ: 192.168.1.172, ...)
     try {
         $hostName = [System.Net.Dns]::GetHostName()
         $ips = [System.Net.Dns]::GetHostAddresses($hostName) | Where-Object { $_.AddressFamily -eq 'InterNetwork' }
@@ -69,15 +126,12 @@ function Find-DigiCamControlUrl {
         }
     } catch {}
 
-    # 2. Thêm localhost & 127.0.0.1
-    $urlsToTest.Add("http://127.0.0.1:5513")
-    $urlsToTest.Add("http://localhost:5513")
-
     $uniqueUrls = $urlsToTest | Select-Object -Unique
 
+    # 1. Thử HTTP Webserver (port 5513)
     foreach ($testUrl in $uniqueUrls) {
         try {
-            $check = Invoke-RestMethod -Uri "$testUrl/?CMD=Get_Current_Value&Param=cameraname" -TimeoutSec 1 -ErrorAction Stop
+            $check = Invoke-RestMethod -Uri "$testUrl/?CMD=Get_Current_Value&Param=cameraname" -TimeoutSec 2 -ErrorAction Stop
             if ($check -ne $null) {
                 $camStr = $check.ToString().Trim()
                 $isConnected = ($camStr.Length -gt 0) -and ($camStr -ne "No camera connected") -and (-not $camStr.Contains("Error"))
@@ -86,34 +140,53 @@ function Find-DigiCamControlUrl {
                     cameraName = if ($camStr) { $camStr } else { "Canon EOS Camera" }
                     connected = $isConnected
                     online = $true
+                    method = "http"
                 }
             }
         } catch {}
     }
 
-    # Thử kiểm tra cổng TCP 5513 (phòng trường hợp web server mở nhưng chưa bật camera)
-    foreach ($testUrl in $uniqueUrls) {
-        try {
-            $uri = [System.Uri]$testUrl
-            $tcp = New-Object System.Net.Sockets.TcpClient
-            $async = $tcp.BeginConnect($uri.Host, $uri.Port, $null, $null)
-            $wait = $async.AsyncWaitHandle.WaitOne(400, $false)
-            if ($wait -and $tcp.Connected) {
-                $tcp.Close()
-                return @{
-                    url = $testUrl
-                    cameraName = "Chưa nhận diện máy ảnh"
-                    connected = $false
-                    online = $true
+    # 2. Nếu HTTP không phản hồi: KIỂM TRA TIẾN TRÌNH DIGICAMCONTROL ĐANG CHẠY TRÊN WINDOWS
+    $proc = Get-Process -Name "CameraControl" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($proc) {
+        if (-not $global:RemoteCmdExe) {
+            $global:RemoteCmdExe = Get-DccRemoteCmdPath
+        }
+
+        $camName = "Canon EOS Camera"
+        if ($global:RemoteCmdExe) {
+            try {
+                $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+                $pinfo.FileName = $global:RemoteCmdExe
+                $pinfo.Arguments = "/c get camera"
+                $pinfo.RedirectStandardOutput = $true
+                $pinfo.UseShellExecute = $false
+                $pinfo.CreateNoWindow = $true
+                $p = [System.Diagnostics.Process]::Start($pinfo)
+                $p.WaitForExit(1500) | Out-Null
+                $cliOut = $p.StandardOutput.ReadToEnd().Trim()
+                if ($cliOut -and (-not $cliOut.Contains("Error")) -and (-not $cliOut.Contains("null"))) {
+                    $camName = $cliOut
                 }
-            }
-            $tcp.Close()
-        } catch {}
+            } catch {}
+        }
+
+        return @{
+            url = "http://127.0.0.1:5513"
+            cameraName = $camName
+            connected = $true
+            online = $true
+            method = "ipc_process"
+        }
     }
 
-    # Mặc định fallback
-    if ($ManualUrl) { return @{ url = $ManualUrl; cameraName = "Chưa nhận diện"; connected = $false; online = $false } }
-    return @{ url = "http://127.0.0.1:5513"; cameraName = "Chưa nhận diện"; connected = $false; online = $false }
+    return @{ 
+        url = "http://127.0.0.1:5513"
+        cameraName = "Chưa nhận diện máy ảnh"
+        connected = $false
+        online = $false 
+        method = "none"
+    }
 }
 
 # Cấu hình session của digiCamControl
@@ -348,16 +421,22 @@ while ($true) {
                             } catch {}
                         }
 
-                        # Kiểm tra xem máy ảnh có đang kết nối không
+                        # Kiểm tra xem máy ảnh / digiCamControl có đang sẵn sàng không
                         $probe = Find-DigiCamControlUrl -ManualUrl $DccUrl
                         $DccUrl = $probe.url
 
-                        if (-not $probe.connected) {
-                            Write-Host "[CANH BAO] Khong the chup: May anh Canon bi ngat ket noi!" -ForegroundColor Yellow
+                        if (-not $global:RemoteCmdExe) {
+                            $global:RemoteCmdExe = Get-DccRemoteCmdPath
+                        }
+                        $isDccRunning = (Get-Process -Name "CameraControl" -ErrorAction SilentlyContinue) -ne $null
+                        $canShoot = $probe.connected -or ($global:RemoteCmdExe -ne $null) -or $isDccRunning
+
+                        if (-not $canShoot) {
+                            Write-Host "[CANH BAO] Khong the chup: digiCamControl chua mo hoac May anh Canon bi ngat ket noi!" -ForegroundColor Yellow
                             $errResult = @{
                                 success = $false
                                 cameraDisconnected = $true
-                                message = "May anh Canon chua duoc ket noi hoac bi rut day USB. Bridge dang tu dong do tim va ket noi lai..."
+                                message = "Máy ảnh Canon chưa kết nối hoặc chưa mở phần mềm digiCamControl trên máy tính!"
                             }
                             Send-JsonResponse -response $response -statusCode 503 -jsonObj $errResult
                             continue
@@ -388,19 +467,11 @@ while ($true) {
                         Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl (Che do: $liveViewSource)" -ForegroundColor White
 
                         # 1. Phát lệnh chụp: ƯU TIÊN 1 qua CameraControlRemoteCmd.exe (Direct IPC - 100% đồng bộ nút bấm GUI)
-                        $possibleCmdPaths = @(
-                            "C:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
-                            "C:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
-                            "D:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
-                            "D:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
-                            "C:\digiCamControl\CameraControlRemoteCmd.exe",
-                            "D:\digiCamControl\CameraControlRemoteCmd.exe"
-                        )
-                        $remoteCmdExe = $possibleCmdPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+                        $remoteCmdExe = $global:RemoteCmdExe
+                        if (-not $remoteCmdExe) { $remoteCmdExe = Get-DccRemoteCmdPath }
 
                         if ($remoteCmdExe -and ($liveViewSource -ne "usb")) {
-                            Write-Host "[DCC] Tim thay CameraControlRemoteCmd.exe tai: $remoteCmdExe" -ForegroundColor Cyan
-                            Write-Host "[DCC] 🚀 [IPC DIRECT] Dang kich hoat man trap va flash qua CLI..." -ForegroundColor White
+                            Write-Host "[DCC] 🚀 [IPC DIRECT] Dang kich hoat man trap va flash qua CLI: $remoteCmdExe" -ForegroundColor Cyan
                             try {
                                 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
                                 $pinfo.FileName = $remoteCmdExe
@@ -412,11 +483,10 @@ while ($true) {
                                 $p = [System.Diagnostics.Process]::Start($pinfo)
                                 $p.WaitForExit(6000) | Out-Null
                                 $cliOut = $p.StandardOutput.ReadToEnd().Trim()
-                                Write-Host "[OK] RemoteCmd da thuc thi: $cliOut" -ForegroundColor Green
+                                Write-Host "[OK] Da kich hoat man trap va flash qua CLI: $cliOut" -ForegroundColor Green
                                 $triggerSuccess = $true
                             } catch {
                                 Write-Host "[CANH BAO] RemoteCmd loi: $($_.Exception.Message)" -ForegroundColor Yellow
-                            }
                         }
 
                         # ƯU TIÊN 2: Kích hoạt qua HTTP Webserver nếu chưa kích hoạt qua CLI
