@@ -513,64 +513,127 @@ app.post('/api/capture', async (req, res) => {
       await configureDigiCamControlSession();
     }
 
-    console.log(`[Bridge] Sending Shutter Release command to digiCamControl at ${dccUrl}...`);
+    const { liveViewSource = 'hdmi' } = req.body || {};
 
-    // Prepare a promise waiting for the new image file
-    const fileWaitPromise = new Promise((resolve, reject) => {
-      pendingCaptureResolve = resolve;
-      // Timeout after configured period
-      const timeoutMs = config.digicamcontrol?.timeoutMs || 10000;
-      setTimeout(() => {
-        if (pendingCaptureResolve === resolve) {
-          pendingCaptureResolve = null;
-          reject(new Error(`Hết thời gian chờ ảnh từ máy ảnh (quá ${timeoutMs / 1000}s)`));
+    // 0. Query previous last captured photo filename/path from digiCamControl
+    let prevLastCaptured = '';
+    try {
+      const lastRes = await fetch(`${dccUrl}/?slc=get&param1=lastcaptured`, { signal: AbortSignal.timeout(1500) });
+      if (lastRes.ok) {
+        prevLastCaptured = (await lastRes.text()).trim();
+      }
+    } catch (e) {}
+
+    // Also get current session folder from digiCamControl dynamically
+    try {
+      const sessRes = await fetch(`${dccUrl}/?slc=get&param1=session.folder`, { signal: AbortSignal.timeout(1500) });
+      if (sessRes.ok) {
+        const sessFolder = (await sessRes.text()).trim();
+        if (sessFolder && fs.existsSync(sessFolder) && !watchDirs.includes(sessFolder)) {
+          watchDirs.push(sessFolder);
+          watcher.add(sessFolder);
+          console.log(`[Bridge] Dynamically watching active digiCamControl session folder: ${sessFolder}`);
         }
-      }, timeoutMs);
+      }
+    } catch (e) {}
+
+    console.log(`[Bridge] Sending Shutter Release command to digiCamControl at ${dccUrl} (Mode: ${liveViewSource})...`);
+
+    // Prepare a promise waiting for the new image file via watcher
+    const fileWaitPromise = new Promise((resolve) => {
+      pendingCaptureResolve = resolve;
+    });
+
+    // Active polling for new photo directly from digiCamControl API (slc=get&param1=lastcaptured)
+    const pollStartTime = Date.now();
+    let pollTimer = null;
+    const pollPromise = new Promise((resolve) => {
+      const checkPoll = async () => {
+        if (Date.now() - pollStartTime > 9500) return;
+        try {
+          const resp = await fetch(`${dccUrl}/?slc=get&param1=lastcaptured`, { signal: AbortSignal.timeout(1000) });
+          if (resp.ok) {
+            const current = (await resp.text()).trim();
+            if (current && current !== '-' && current !== prevLastCaptured && !current.includes('Error')) {
+              console.log(`[Bridge] digiCamControl reported new lastcaptured: ${current}`);
+              if (fs.existsSync(current)) {
+                return resolve(current);
+              }
+              // If current is just a filename, check in watchDirs
+              const baseName = path.basename(current);
+              for (const dir of watchDirs) {
+                const cand = path.join(dir, baseName);
+                if (fs.existsSync(cand)) return resolve(cand);
+              }
+            }
+          }
+        } catch (e) {}
+        pollTimer = setTimeout(checkPoll, 200);
+      };
+      pollTimer = setTimeout(checkPoll, 200);
     });
 
     // Send Capture command to digiCamControl
-    // If Live View is active, try LiveView_Capture first to pause EVF and take photo cleanly
+    // When in HDMI mode or default, use standard CMD=Capture (the exact same command that clicking Capture in the GUI uses!)
     let captureRes;
-    try {
-      captureRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
-      if (!captureRes.ok) throw new Error('LiveView_Capture status ' + captureRes.status);
-      console.log('[Bridge] LiveView_Capture sent successfully!');
-    } catch (lvErr) {
-      console.log(`[Bridge] LiveView_Capture note (${lvErr.message}), falling back to standard Capture...`);
+    if (liveViewSource !== 'usb') {
       try {
+        console.log('[Bridge] Sending standard CMD=Capture to digiCamControl...');
         captureRes = await fetch(`${dccUrl}/?CMD=Capture`, { signal: AbortSignal.timeout(6000) });
         if (!captureRes.ok) throw new Error(`Capture status ${captureRes.status}`);
+        console.log('[Bridge] CMD=Capture sent successfully! Flash should trigger now.');
       } catch (capErr) {
-        console.log(`[Bridge] Standard Capture failed (${capErr.message}), trying Capture_No_Af (bypass AF lock)...`);
-        captureRes = await fetch(`${dccUrl}/?CMD=Capture_No_Af`, { signal: AbortSignal.timeout(6000) });
-        if (!captureRes.ok) {
-          throw new Error(`digiCamControl trả về mã lỗi: ${captureRes.status} ${captureRes.statusText}`);
+        console.warn(`[Bridge] Standard Capture note (${capErr.message}), trying CMD=Capture_No_Af (bypass AF)...`);
+        try {
+          captureRes = await fetch(`${dccUrl}/?CMD=Capture_No_Af`, { signal: AbortSignal.timeout(6000) });
+          if (!captureRes.ok) throw new Error(`Capture_No_Af status ${captureRes.status}`);
+          console.log('[Bridge] CMD=Capture_No_Af sent successfully!');
+        } catch (noAfErr) {
+          console.warn(`[Bridge] Capture_No_Af note (${noAfErr.message}), falling back to LiveView_Capture...`);
+          captureRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
         }
+      }
+    } else {
+      // In USB mode where digiCamControl's LiveView window is active:
+      try {
+        console.log('[Bridge] (USB Mode) Sending LiveView_Capture...');
+        captureRes = await fetch(`${dccUrl}/?CMD=LiveView_Capture`, { signal: AbortSignal.timeout(5000) });
+        if (!captureRes.ok) throw new Error('LiveView_Capture status ' + captureRes.status);
+      } catch (lvErr) {
+        console.warn(`[Bridge] LiveView_Capture note (${lvErr.message}), trying standard Capture...`);
+        captureRes = await fetch(`${dccUrl}/?CMD=Capture`, { signal: AbortSignal.timeout(6000) });
       }
     }
 
-    console.log('[Bridge] Shutter command sent! Camera shutter clicked & flash triggered. Waiting for photo transfer...');
+    console.log('[Bridge] Shutter command sent! Waiting for photo file transfer...');
 
-    // Wait for the new file to land in the folder OR try preview fallback
+    // Wait for the new file via either watcher, lastcaptured polling, or preview fallback (max 10s)
     let imageFilePath = null;
     try {
-      imageFilePath = await fileWaitPromise;
+      const timeoutPromise = new Promise((_, reject) => {
+        const timeoutMs = config.digicamcontrol?.timeoutMs || 10000;
+        setTimeout(() => reject(new Error(`Hết thời gian chờ ảnh từ máy ảnh (quá ${timeoutMs / 1000}s)`)), timeoutMs);
+      });
+
+      imageFilePath = await Promise.race([fileWaitPromise, pollPromise, timeoutPromise]);
     } catch (waitErr) {
-      console.warn(`[Bridge] Folder wait notice: ${waitErr.message}. Checking preview fallback...`);
+      console.warn(`[Bridge] Disk wait notice: ${waitErr.message}. Checking preview fallback...`);
       // Fallback: try fetching latest preview image directly from digiCamControl web server
       try {
         const prevRes = await fetch(`${dccUrl}/preview.jpg`, { signal: AbortSignal.timeout(4000) });
         if (prevRes.ok) {
           const arrayBuffer = await prevRes.arrayBuffer();
           const base64 = `data:image/jpeg;base64,${Buffer.from(arrayBuffer).toString('base64')}`;
-          // Tự động khôi phục Live View sau khi chụp qua preview
-          setTimeout(async () => {
-            try {
-              await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
-              await new Promise(r => setTimeout(r, 400));
-              await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
-            } catch (e) {}
-          }, 300);
+          
+          if (liveViewSource === 'usb') {
+            setTimeout(async () => {
+              try {
+                await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
+                await new Promise(r => setTimeout(r, 400));
+                await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
+              } catch (e) {}
+            }, 300);
+          }
 
           return res.json({
             success: true,
@@ -585,6 +648,8 @@ app.post('/api/capture', async (req, res) => {
         console.warn('[Bridge] Preview fallback failed:', prevErr.message);
       }
       throw waitErr;
+    } finally {
+      if (pollTimer) clearTimeout(pollTimer);
     }
 
     // Read full-resolution original file from disk
@@ -597,15 +662,16 @@ app.post('/api/capture', async (req, res) => {
 
       console.log(`[Bridge] Successfully loaded original photo: ${path.basename(imageFilePath)} (${fileSizeMb} MB, ${Date.now() - startTime}ms)`);
 
-      // Tự động khôi phục Live View và gửi lệnh Focus để Live View tiếp tục chạy mượt mà
-      setTimeout(async () => {
-        try {
-          await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
-          await new Promise(r => setTimeout(r, 400));
-          await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
-          console.log('[Bridge] Live View automatically resumed after capture.');
-        } catch (e) {}
-      }, 300);
+      if (liveViewSource === 'usb') {
+        setTimeout(async () => {
+          try {
+            await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
+            await new Promise(r => setTimeout(r, 400));
+            await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
+            console.log('[Bridge] USB Live View resumed after capture.');
+          } catch (e) {}
+        }, 300);
+      }
 
       return res.json({
         success: true,

@@ -339,10 +339,12 @@ while ($true) {
                         $reader.Close()
 
                         $orderCode = "LALE"
+                        $liveViewSource = "hdmi"
                         if ($body) {
                             try {
                                 $jsonBody = $body | ConvertFrom-Json
                                 if ($jsonBody.orderCode) { $orderCode = $jsonBody.orderCode }
+                                if ($jsonBody.liveViewSource) { $liveViewSource = $jsonBody.liveViewSource }
                             } catch {}
                         }
 
@@ -361,46 +363,68 @@ while ($true) {
                             continue
                         }
 
+                        # 0. Lấy tên ảnh gần nhất trước khi chụp để so sánh (lastcaptured)
+                        $prevLastCaptured = ""
+                        try {
+                            $prevRes = Invoke-RestMethod -Uri "$DccUrl/?slc=get&param1=lastcaptured" -TimeoutSec 1 -ErrorAction SilentlyContinue
+                            if ($prevRes) { $prevLastCaptured = $prevRes.ToString().Trim() }
+                        } catch {}
+
+                        # Thêm thư mục session đang hoạt động của digiCamControl vào danh sách theo dõi
+                        try {
+                            $sessFolderRes = Invoke-RestMethod -Uri "$DccUrl/?slc=get&param1=session.folder" -TimeoutSec 1 -ErrorAction SilentlyContinue
+                            if ($sessFolderRes) {
+                                $sessFolder = $sessFolderRes.ToString().Trim()
+                                if ($sessFolder -and (Test-Path $sessFolder) -and (-not $potentialPhotoDirs.Contains($sessFolder))) {
+                                    $potentialPhotoDirs.Add($sessFolder)
+                                    Write-Host "[DCC] Da them thu muc session vao danh sach theo doi: $sessFolder" -ForegroundColor Cyan
+                                }
+                            }
+                        } catch {}
+
                         $beforeCaptureTime = (Get-Date).AddSeconds(-1)
                         $triggerSuccess = $false
 
-                        Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl" -ForegroundColor White
+                        Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl (Che do: $liveViewSource)" -ForegroundColor White
 
-                        try {
-                            # Thử LiveView_Capture trước (khi đang mở Live View)
+                        # 1. Phát lệnh chụp: Nếu là HDMI (hoặc không phải USB liveview), dùng CMD=Capture tiêu chuẩn!
+                        if ($liveViewSource -ne "usb") {
+                            try {
+                                Write-Host "[DCC] Gui lenh CMD=Capture tieu chuan..." -ForegroundColor White
+                                $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
+                                $triggerSuccess = $true
+                                Write-Host "[OK] Da phat lenh Capture tieu chuan thanh cong! Flash da no." -ForegroundColor Green
+                            } catch {
+                                Write-Host "[CANH BAO] CMD=Capture gap loi ($($_.Exception.Message)), thu CMD=Capture_No_Af (bo qua AF)..." -ForegroundColor Yellow
+                                try {
+                                    $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture_No_Af" -TimeoutSec 6 -ErrorAction Stop
+                                    $triggerSuccess = $true
+                                    Write-Host "[OK] Da phat lenh Capture_No_Af thanh cong! Flash da no." -ForegroundColor Green
+                                } catch {
+                                    Write-Host "[CANH BAO] Thu LiveView_Capture..." -ForegroundColor Yellow
+                                    try {
+                                        $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Capture" -TimeoutSec 5 -ErrorAction SilentlyContinue
+                                        $triggerSuccess = $true
+                                    } catch {}
+                                }
+                            }
+                        } else {
+                            # USB Live View mode
                             try {
                                 $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Capture" -TimeoutSec 5 -ErrorAction Stop
                                 $triggerSuccess = $true
                                 Write-Host "[OK] Da phat lenh LiveView_Capture thanh cong! Flash da no." -ForegroundColor Green
                             } catch {
-                                # Fallback 1: Lệnh Capture thông thường
                                 try {
                                     $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
                                     $triggerSuccess = $true
-                                    Write-Host "[OK] Da phat lenh Capture tieu chuan! Flash da no." -ForegroundColor Green
-                                } catch {
-                                    # Fallback 2: Lệnh Capture_No_Af (bỏ qua khóa nét AF)
-                                    $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture_No_Af" -TimeoutSec 6 -ErrorAction Stop
-                                    $triggerSuccess = $true
-                                    Write-Host "[OK] Da phat lenh Capture_No_Af (bo qua AF)! Flash da no." -ForegroundColor Green
-                                }
-                            }
-                        } catch {
-                            Write-Host "[CANH BAO] Khong the ket noi toi $DccUrl ($($_.Exception.Message))" -ForegroundColor Yellow
-                            $reProbe = Find-DigiCamControlUrl
-                            $DccUrl = $reProbe.url
-                            try {
-                                $triggerRes = Invoke-RestMethod -Uri "$DccUrl/?CMD=Capture" -TimeoutSec 6 -ErrorAction Stop
-                                $triggerSuccess = $true
-                                Write-Host "[OK] Da phat lenh Shutter sau khi tu dong chuyen sang: $DccUrl" -ForegroundColor Green
-                            } catch {
-                                Write-Host "[LOI] Thu lai van that bai voi $DccUrl" -ForegroundColor Red
+                                } catch {}
                             }
                         }
 
-                        # Chờ đợi file ảnh mới xuất hiện trong các thư mục tiềm năng
+                        # 2. Chờ đợi file ảnh mới xuất hiện: Kết hợp dò tìm thư mục + hỏi trực tiếp API lastcaptured
                         $foundFile = $null
-                        $timeoutSeconds = 8
+                        $timeoutSeconds = 9
                         $waited = 0
 
                         Write-Host "Dang cho may anh truyen file anh 24MP ve may tinh..." -NoNewline
@@ -408,6 +432,31 @@ while ($true) {
                             Start-Sleep -Milliseconds 250
                             $waited++
 
+                            # A. Kiểm tra API lastcaptured của digiCamControl
+                            try {
+                                $currCapturedRes = Invoke-RestMethod -Uri "$DccUrl/?slc=get&param1=lastcaptured" -TimeoutSec 1 -ErrorAction SilentlyContinue
+                                if ($currCapturedRes) {
+                                    $currCaptured = $currCapturedRes.ToString().Trim()
+                                    if ($currCaptured -and $currCaptured -ne "-" -and $currCaptured -ne $prevLastCaptured -and (-not $currCaptured.Contains("Error"))) {
+                                        Write-Host "`n[DCC] Phat hien anh moi qua API lastcaptured: $currCaptured" -ForegroundColor Green
+                                        if (Test-Path $currCaptured) {
+                                            $foundFile = $currCaptured
+                                            break
+                                        }
+                                        $baseName = [System.IO.Path]::GetFileName($currCaptured)
+                                        foreach ($dir in $potentialPhotoDirs) {
+                                            $testPath = Join-Path $dir $baseName
+                                            if (Test-Path $testPath) {
+                                                $foundFile = $testPath
+                                                break
+                                            }
+                                        }
+                                        if ($foundFile) { break }
+                                    }
+                                }
+                            } catch {}
+
+                            # B. Quét các thư mục lưu ảnh
                             foreach ($dir in $potentialPhotoDirs) {
                                 if (Test-Path $dir) {
                                     $latest = Get-ChildItem -Path $dir -Include *.jpg,*.jpeg,*.png -File -Recurse -ErrorAction SilentlyContinue | 
@@ -416,7 +465,7 @@ while ($true) {
                                               Select-Object -First 1
 
                                     if ($latest) {
-                                        Start-Sleep -Milliseconds 300
+                                        Start-Sleep -Milliseconds 200
                                         $foundFile = $latest.FullName
                                         break
                                     }
@@ -450,18 +499,19 @@ while ($true) {
                                 }
                                 Send-JsonResponse -response $response -statusCode 200 -jsonObj $result
 
-                                # Tự động đánh thức Live View sau khi chụp xong
-                                try {
-                                    Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
-                                    Start-Sleep -Milliseconds 300
-                                    Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                                # Chỉ khôi phục Live View nếu người dùng đang dùng chế độ USB
+                                if ($liveViewSource -eq "usb") {
                                     try {
-                                        $wshell = New-Object -ComObject WScript.Shell
-                                        $wshell.AppActivate("Chrome") | Out-Null
-                                        $wshell.AppActivate("Edge") | Out-Null
+                                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+                                        Start-Sleep -Milliseconds 300
+                                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                                        try {
+                                            $wshell = New-Object -ComObject WScript.Shell
+                                            $wshell.AppActivate("Chrome") | Out-Null
+                                            $wshell.AppActivate("Edge") | Out-Null
+                                        } catch {}
                                     } catch {}
-                                    Write-Host "[LIVEVIEW] Da tu dong khoi phuc Live View & Focus sau khi chup." -ForegroundColor Green
-                                } catch {}
+                                }
                                 continue
                             } catch {
                                 Write-Host "[LOI] Khong doc duoc file anh tu o dia: $($_.Exception.Message)" -ForegroundColor Red
@@ -492,16 +542,18 @@ while ($true) {
                                 }
                                 Send-JsonResponse -response $response -statusCode 200 -jsonObj $result
 
-                                try {
-                                    Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
-                                    Start-Sleep -Milliseconds 300
-                                    Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                                if ($liveViewSource -eq "usb") {
                                     try {
-                                        $wshell = New-Object -ComObject WScript.Shell
-                                        $wshell.AppActivate("Chrome") | Out-Null
-                                        $wshell.AppActivate("Edge") | Out-Null
+                                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+                                        Start-Sleep -Milliseconds 300
+                                        Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                                        try {
+                                            $wshell = New-Object -ComObject WScript.Shell
+                                            $wshell.AppActivate("Chrome") | Out-Null
+                                            $wshell.AppActivate("Edge") | Out-Null
+                                        } catch {}
                                     } catch {}
-                                } catch {}
+                                }
                                 continue
                             }
                         } catch {
