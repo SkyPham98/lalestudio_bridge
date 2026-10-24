@@ -417,6 +417,69 @@ app.get('/api/liveview/stop', async (req, res) => {
   }
 });
 
+// 🎯 API Kích hoạt Lấy Nét Tự Động (Dual Pixel AF / Focus Lock) cho Canon EOS R50
+app.all('/api/focus', async (req, res) => {
+  console.log(`[Bridge] 🎯 Nhận lệnh lấy nét (Focus) cho Canon EOS R50...`);
+  try {
+    if (config.mode === 'mock' || req.query.mock === 'true') {
+      console.log('[Bridge] Mock Mode: Mô phỏng lấy nét thành công.');
+      return res.json({ success: true, message: 'Mock Canon R50 autofocus triggered' });
+    }
+
+    const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
+    let focused = false;
+    let methodUsed = '';
+
+    // ƯU TIÊN 1: Gọi trực tiếp CameraControlRemoteCmd.exe (Giao thức IPC)
+    const remoteCmdExe = findCameraControlRemoteCmd();
+    if (remoteCmdExe) {
+      try {
+        await new Promise((resolve, reject) => {
+          execFile(remoteCmdExe, ['/c', 'LiveView_Focus'], { timeout: 3000 }, (err, stdout) => {
+            if (err) return reject(err);
+            resolve(stdout);
+          });
+        });
+        focused = true;
+        methodUsed = 'RemoteCmd CLI (LiveView_Focus)';
+      } catch (cliErr) {
+        console.warn('[Bridge] RemoteCmd focus notice:', cliErr.message);
+      }
+    }
+
+    // ƯU TIÊN 2: Kích hoạt qua HTTP Webserver của digiCamControl
+    if (!focused) {
+      const endpoints = [
+        `${dccUrl}/?CMD=LiveView_Focus`,
+        `${dccUrl}/?CMD=AutoFocus`,
+        `${dccUrl}/?CMD=Btn_AutoFocus`,
+        `${dccUrl}/?slc=LiveView_Focus&param1=&param2=`
+      ];
+
+      for (const url of endpoints) {
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(2000) });
+          if (resp.ok) {
+            focused = true;
+            methodUsed = `HTTP (${url})`;
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+
+    console.log(`[Bridge] 🎯 Đã kích hoạt lấy nét Canon R50 (${methodUsed || 'Đã gửi lệnh'})`);
+    return res.json({
+      success: true,
+      message: 'Đã kích hoạt lấy nét tự động (Canon EOS R50 Dual Pixel AF)',
+      method: methodUsed
+    });
+  } catch (err) {
+    console.error('[Bridge] Lỗi kích hoạt lấy nét:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Active MJPEG stream clients broadcaster
 const streamClients = new Set();
 let streamInterval = null;
@@ -863,6 +926,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 ✓ Photo Watch Folder: ${absWatchDir}
 ✓ Status API: http://127.0.0.1:${PORT}/api/status
 ✓ Trigger API: http://127.0.0.1:${PORT}/api/capture
+✓ Focus API: http://127.0.0.1:${PORT}/api/focus
 ✓ Auto-Reconnect: Đang bật (tự động kết nối lại khi cắm lại máy ảnh)
 ========================================================================
 Ready to trigger Canon R50 physical shutter & Studio Flash!

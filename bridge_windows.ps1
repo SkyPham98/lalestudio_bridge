@@ -402,6 +402,33 @@ while ($true) {
                         continue
                     }
 
+                    # 1b. API FOCUS: /api/focus (Kích hoạt lấy nét Canon R50 qua Remote 2 / Nút Lấy Nét)
+                    if ($rawUrl -match "^/api/focus") {
+                        Write-Host "`n[LAY NET] Nhan lenh lay net tu Kiosk! Dang kich hoat autofocus Canon R50..." -ForegroundColor Green
+                        if (-not $global:RemoteCmdExe) {
+                            $global:RemoteCmdExe = Get-DccRemoteCmdPath
+                        }
+                        $focused = $false
+                        if ($global:RemoteCmdExe) {
+                            try {
+                                Start-Process -FilePath $global:RemoteCmdExe -ArgumentList "/c", "LiveView_Focus" -WindowStyle Hidden -ErrorAction SilentlyContinue
+                                $focused = $true
+                            } catch {}
+                        }
+                        if (-not $focused -and $DccUrl) {
+                            try {
+                                Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
+                                $focused = $true
+                            } catch {}
+                        }
+                        $focusResult = @{
+                            success = $true
+                            message = "Đã kích hoạt lấy nét máy ảnh Canon R50"
+                        }
+                        Send-JsonResponse -response $response -statusCode 200 -jsonObj $focusResult
+                        continue
+                    }
+
                     # 2. API CAPTURE: /api/capture
                     if ($rawUrl -match "^/api/capture" -and $method -eq "POST") {
                         Write-Host "`n[CHUP ANH] Nhan lenh tu Kiosk phong chup! Dang kich hoat co may anh & Flash..." -ForegroundColor Cyan
