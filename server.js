@@ -781,6 +781,24 @@ app.post('/api/capture', async (req, res) => {
     // ƯU TIÊN 1: Gọi trực tiếp CameraControlRemoteCmd.exe (Giao thức IPC đồng bộ nút bấm GUI 100%, không bị phụ thuộc webserver HTTP)
     let triggered = false;
     const remoteCmdExe = findCameraControlRemoteCmd();
+
+    // 🎯 TỰ ĐỘNG LẤY NÉT (PRE-FOCUS) TRƯỚC KHI MỞ MÀN TRẬP
+    const autoFocusBeforeCapture = req.body?.autoFocus !== false;
+    if (autoFocusBeforeCapture && liveViewSource !== 'usb') {
+      try {
+        console.log('[Bridge] 🎯 Đang tự động lấy nét (Pre-focus Dual Pixel AF) cho Canon R50 trước khi chụp...');
+        if (remoteCmdExe) {
+          execFile(remoteCmdExe, ['/c', 'LiveView_Focus'], { timeout: 1500 }, () => {});
+        } else {
+          fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(1000) }).catch(() => {});
+        }
+        // Chờ 250ms cho cảm biến Dual Pixel AF của Canon R50 khóa nét vào mắt/khuôn mặt
+        await new Promise(r => setTimeout(r, 250));
+      } catch (fErr) {
+        console.warn('[Bridge] Pre-focus notice:', fErr.message);
+      }
+    }
+
     if (remoteCmdExe && liveViewSource !== 'usb') {
       const cliRes = await triggerViaRemoteCmd(false);
       if (cliRes.success) {

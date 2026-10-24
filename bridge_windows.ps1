@@ -497,6 +497,21 @@ while ($true) {
                         $remoteCmdExe = $global:RemoteCmdExe
                         if (-not $remoteCmdExe) { $remoteCmdExe = Get-DccRemoteCmdPath }
 
+                        # 🎯 TỰ ĐỘNG LẤY NÉT (PRE-FOCUS) TRƯỚC KHI MỞ MÀN TRẬP
+                        if ($liveViewSource -ne "usb") {
+                            Write-Host "[LAY NET] 🎯 Tu dong lay net (Pre-focus Dual Pixel AF) cho Canon R50..." -ForegroundColor Green
+                            if ($remoteCmdExe) {
+                                try {
+                                    Start-Process -FilePath $remoteCmdExe -ArgumentList "/c", "LiveView_Focus" -WindowStyle Hidden -ErrorAction SilentlyContinue
+                                } catch {}
+                            } elseif ($DccUrl) {
+                                try {
+                                    Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveView_Focus" -TimeoutSec 1 -ErrorAction SilentlyContinue | Out-Null
+                                } catch {}
+                            }
+                            Start-Sleep -Milliseconds 250
+                        }
+
                         if ($remoteCmdExe -and ($liveViewSource -ne "usb")) {
                             Write-Host "[DCC] 🚀 [IPC DIRECT] Dang kich hoat man trap va flash qua CLI: $remoteCmdExe" -ForegroundColor Cyan
                             try {
