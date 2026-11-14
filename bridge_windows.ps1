@@ -1,4 +1,4 @@
-﻿# ========================================================================
+# ========================================================================
 # 🌸 LALÉ PHOTO STUDIO - NATIVE WINDOWS CAMERA BRIDGE (AUTO-RECONNECT)
 # Chạy trực tiếp trên Windows 10/11 - KHÔNG CẦN CÀI ĐẶT NODE.JS!
 # Tự động phát hiện IP của digiCamControl, tự động kết nối lại từ đầu khi mất kết nối
