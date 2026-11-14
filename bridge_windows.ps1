@@ -1,4 +1,4 @@
-# ========================================================================
+﻿# ========================================================================
 # 🌸 LALÉ PHOTO STUDIO - NATIVE WINDOWS CAMERA BRIDGE (AUTO-RECONNECT)
 # Chạy trực tiếp trên Windows 10/11 - KHÔNG CẦN CÀI ĐẶT NODE.JS!
 # Tự động phát hiện IP của digiCamControl, tự động kết nối lại từ đầu khi mất kết nối
@@ -102,6 +102,109 @@ if ($global:RemoteCmdExe) {
     Write-Host " [OK] TIM THAY TIEN ICH CHUP TRUC TIEP: $global:RemoteCmdExe" -ForegroundColor Green
 } else {
     Write-Host " [CHU Y] Chua phat hien CameraControlRemoteCmd.exe. Se tu dong do tim khi digiCamControl khoi chay." -ForegroundColor Yellow
+}
+
+# Khởi tạo và tự động biên dịch FujiBridge cho Fujifilm nếu cần
+$global:FujiBridgeExe = Join-Path $PSScriptRoot "bin\fujifilm_win64\fuji_bridge.exe"
+if (-not (Test-Path $global:FujiBridgeExe)) {
+    $csSource = Join-Path $PSScriptRoot "bin\fujifilm_win64\FujiBridge.cs"
+    if (Test-Path $csSource) {
+        $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+        if (-not (Test-Path $csc)) { $csc = "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+        if (Test-Path $csc) {
+            try {
+                Write-Host " [INFO] Dang tu dong bien dich fuji_bridge.exe (64-bit)..." -ForegroundColor Cyan
+                $proc = Start-Process -FilePath $csc -ArgumentList "/target:exe /platform:x64 /optimize+ /out:`"$global:FujiBridgeExe`" `"$csSource`"" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
+                if ($proc.ExitCode -eq 0) {
+                    Write-Host " [OK] Da tao thanh cong: fuji_bridge.exe (FUJIFILM SDK)" -ForegroundColor Green
+                }
+            } catch {}
+        }
+    }
+}
+if (Test-Path $global:FujiBridgeExe) {
+    Write-Host " [OK] TIM THAY TIEN ICH FUJIFILM BRIDGE: $global:FujiBridgeExe" -ForegroundColor Green
+}
+
+# Hàm kiểm tra trạng thái máy ảnh Fujifilm (Daemon HTTP 5514 hoặc fuji_bridge.exe CLI)
+function Find-FujifilmCamera {
+    try {
+        $check = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/status" -TimeoutSec 1 -ErrorAction Stop
+        if ($check -and ($check.connected -or $check.cameraConnected)) {
+            return @{
+                connected = $true
+                cameraName = if ($check.cameraName) { $check.cameraName } else { "FUJIFILM X-T4" }
+                method = "daemon"
+                resolution = "6240x4160 (26.1 MP)"
+            }
+        }
+    } catch {}
+
+    if ($global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+        try {
+            $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+            $pinfo.FileName = $global:FujiBridgeExe
+            $pinfo.Arguments = "status"
+            $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
+            $pinfo.RedirectStandardOutput = $true
+            $pinfo.UseShellExecute = $false
+            $pinfo.CreateNoWindow = $true
+            $p = [System.Diagnostics.Process]::Start($pinfo)
+            $p.WaitForExit(3000) | Out-Null
+            $out = $p.StandardOutput.ReadToEnd().Trim()
+            if ($out) {
+                $json = $out | ConvertFrom-Json
+                if ($json.connected) {
+                    return @{
+                        connected = $true
+                        cameraName = if ($json.cameraName) { $json.cameraName } else { "FUJIFILM X-T4" }
+                        method = "cli"
+                        resolution = "6240x4160 (26.1 MP)"
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    return @{ connected = $false; cameraName = $null; method = "none"; resolution = "Chưa kết nối" }
+}
+
+# Hàm lấy driver máy ảnh tích cực (Canon hoặc Fujifilm)
+function Get-ActiveCameraInfo {
+    param ([string]$ManualDccUrl)
+
+    $dcc = Find-DigiCamControlUrl -ManualUrl $ManualDccUrl
+    if ($dcc.connected) {
+        return @{
+            driver = "digicamcontrol"
+            connected = $true
+            cameraName = $dcc.cameraName
+            source = "digiCamControl ($($dcc.url))"
+            resolution = "6000x4000 (24.2 MP)"
+            dcc = $dcc
+        }
+    }
+
+    $fuji = Find-FujifilmCamera
+    if ($fuji.connected) {
+        return @{
+            driver = "fujifilm"
+            connected = $true
+            cameraName = $fuji.cameraName
+            source = "FUJIFILM Camera Control SDK (64-bit)"
+            resolution = "6240x4160 (26.1 MP)"
+            dcc = $dcc
+        }
+    }
+
+    return @{
+        driver = if ($dcc.online) { "digicamcontrol" } else { "none" }
+        connected = $false
+        cameraName = if ($dcc.online) { $dcc.cameraName } else { "Chưa nhận diện máy ảnh (Hỗ trợ Canon EOS & FUJIFILM X-T4)" }
+        source = if ($dcc.online) { "digiCamControl ($($dcc.url))" } else { "None" }
+        resolution = "Chưa xác định"
+        dcc = $dcc
+    }
 }
 
 # Hàm tự động dò tìm IP hoặc tiến trình của digiCamControl
@@ -378,22 +481,24 @@ while ($true) {
                     # 1. API STATUS: /api/status
                     if ($rawUrl -match "^/api/status") {
                         Test-And-AutoReconnect -Force
-                        $checkDcc = Find-DigiCamControlUrl -ManualUrl $DccUrl
-                        $DccUrl = $checkDcc.url
+                        $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
+                        if ($camInfo.dcc) { $DccUrl = $camInfo.dcc.url }
 
                         $statusData = @{
                             success = $true
                             bridgeOnline = $true
-                            version = "2.2.0-AutoReconnect"
+                            version = "2.3.0-DualCamera"
                             mode = "native-windows"
+                            activeDriver = $camInfo.driver
                             camera = @{
-                                connected = $checkDcc.connected
-                                name = if ($checkDcc.cameraName) { $checkDcc.cameraName } else { "Chưa nhận diện máy ảnh (Đang chờ kết nối lại)" }
-                                source = "digiCamControl ($DccUrl)"
+                                connected = $camInfo.connected
+                                name = $camInfo.cameraName
+                                source = $camInfo.source
+                                resolution = $camInfo.resolution
                             }
                             autoReconnect = @{
                                 enabled = $true
-                                isCameraConnected = $script:isCameraConnected
+                                isCameraConnected = $camInfo.connected
                             }
                             dccUrl = $DccUrl
                             watchDirectory = $PhotoDir
@@ -402,13 +507,40 @@ while ($true) {
                         continue
                     }
 
-                    # 1b. API FOCUS: /api/focus (Kích hoạt lấy nét Canon R50 qua Remote 2 / Nút Lấy Nét)
+                    # 1b. API FOCUS: /api/focus (Kích hoạt lấy nét Canon R50 / FUJIFILM X-T4)
                     if ($rawUrl -match "^/api/focus") {
-                        Write-Host "`n[LAY NET] Nhan lenh lay net tu Kiosk! Dang kich hoat autofocus Canon R50..." -ForegroundColor Green
+                        Write-Host "`n[LAY NET] Nhan lenh lay net tu Kiosk!..." -ForegroundColor Green
+                        $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
+                        $focused = $false
+
+                        # FUJIFILM FOCUS
+                        if ($camInfo.driver -eq "fujifilm") {
+                            Write-Host "[FUJI] Dang kich hoat autofocus FUJIFILM..." -ForegroundColor Cyan
+                            try {
+                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/focus" -TimeoutSec 2 -ErrorAction Stop
+                                if ($fujiRes -and $fujiRes.success) { $focused = $true }
+                            } catch {}
+
+                            if (-not $focused -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+                                try {
+                                    $p = Start-Process -FilePath $global:FujiBridgeExe -ArgumentList "focus" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
+                                    if ($p.ExitCode -eq 0) { $focused = $true }
+                                } catch {}
+                            }
+
+                            $focusResult = @{
+                                success = $focused
+                                message = if ($focused) { "Đã kích hoạt autofocus FUJIFILM" } else { "Lấy nét Fujifilm thất bại" }
+                            }
+                            Send-JsonResponse -response $response -statusCode 200 -jsonObj $focusResult
+                            continue
+                        }
+
+                        # CANON EOS FOCUS (Existing)
+                        Write-Host "[CANON] Dang kich hoat autofocus Dual Pixel AF cho Canon R50..." -ForegroundColor Green
                         if (-not $global:RemoteCmdExe) {
                             $global:RemoteCmdExe = Get-DccRemoteCmdPath
                         }
-                        $focused = $false
                         if ($global:RemoteCmdExe) {
                             try {
                                 Start-Process -FilePath $global:RemoteCmdExe -ArgumentList "/c", "LiveView_Focus" -WindowStyle Hidden -ErrorAction SilentlyContinue
@@ -448,7 +580,57 @@ while ($true) {
                             } catch {}
                         }
 
-                        # Kiểm tra xem máy ảnh / digiCamControl có đang sẵn sàng không
+                        # Kiểm tra máy ảnh hiện tại (FUJIFILM hoặc CANON)
+                        $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
+
+                        # A. XỬ LÝ CHỤP ẢNH BẰNG FUJIFILM (26.1 MP)
+                        if ($camInfo.driver -eq "fujifilm") {
+                            Write-Host "[FUJI] 📸 Kich hoat man trap FUJIFILM va Flash studio (26.1 MP)..." -ForegroundColor Cyan
+                            $fujiCaptured = $null
+
+                            # Ưu tiên qua Daemon HTTP 5514
+                            try {
+                                $postBody = @{ orderCode = $orderCode; photoSaveDir = $PhotoDir; autoFocus = $true } | ConvertTo-Json
+                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 15 -ErrorAction Stop
+                                if ($fujiRes -and $fujiRes.success) {
+                                    $fujiCaptured = $fujiRes
+                                }
+                            } catch {}
+
+                            # Thử qua CLI fuji_bridge.exe nếu daemon chưa chạy
+                            if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+                                try {
+                                    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+                                    $pinfo.FileName = $global:FujiBridgeExe
+                                    $pinfo.Arguments = "capture `"$PhotoDir`" `"$orderCode`""
+                                    $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
+                                    $pinfo.RedirectStandardOutput = $true
+                                    $pinfo.UseShellExecute = $false
+                                    $pinfo.CreateNoWindow = $true
+                                    $p = [System.Diagnostics.Process]::Start($pinfo)
+                                    $p.WaitForExit(15000) | Out-Null
+                                    $out = $p.StandardOutput.ReadToEnd().Trim()
+                                    if ($out) {
+                                        $fujiCaptured = $out | ConvertFrom-Json
+                                    }
+                                } catch {}
+                            }
+
+                            if ($fujiCaptured -and $fujiCaptured.success) {
+                                Write-Host "[OK] Chup anh FUJIFILM thanh cong! Do phan giai: $($fujiCaptured.resolution)" -ForegroundColor Green
+                                Send-JsonResponse -response $response -statusCode 200 -jsonObj $fujiCaptured
+                                continue
+                            } else {
+                                $errResult = @{
+                                    success = $false
+                                    message = "Lỗi chụp ảnh FUJIFILM: Không nhận được phản hồi từ camera."
+                                }
+                                Send-JsonResponse -response $response -statusCode 500 -jsonObj $errResult
+                                continue
+                            }
+                        }
+
+                        # B. XỬ LÝ CHỤP ẢNH BẰNG CANON / DIGICAMCONTROL (Giữ nguyên 100%)
                         $probe = Find-DigiCamControlUrl -ManualUrl $DccUrl
                         $DccUrl = $probe.url
 
@@ -465,6 +647,9 @@ while ($true) {
                                 cameraDisconnected = $true
                                 message = "Máy ảnh Canon chưa kết nối hoặc chưa mở phần mềm digiCamControl trên máy tính!"
                             }
+                            Send-JsonResponse -response $response -statusCode 503 -jsonObj $errResult
+                            continue
+                        }
                             Send-JsonResponse -response $response -statusCode 503 -jsonObj $errResult
                             continue
                         }

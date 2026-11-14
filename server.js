@@ -18,11 +18,18 @@ process.on('unhandledRejection', (reason) => {
 const configPath = path.join(__dirname, 'config.json');
 let config = {
   port: 4000,
-  mode: 'digicamcontrol',
+  mode: 'auto',
   digicamcontrol: {
     url: 'http://127.0.0.1:5513',
     timeoutMs: 12000,
     photoSaveDir: path.join(__dirname, 'captured_photos')
+  },
+  fujifilm: {
+    url: 'http://127.0.0.1:5514',
+    binPath: path.join(__dirname, 'bin', 'fujifilm_win64', 'fuji_bridge.exe'),
+    timeoutMs: 12000,
+    photoSaveDir: path.join(__dirname, 'captured_photos'),
+    autoFocus: true
   },
   hotfolder: {
     enabled: false,
@@ -292,6 +299,302 @@ async function configureDigiCamControlSession(force = false) {
   }
 }
 
+/**
+ * ========================================================================
+ * FUJIFILM CAMERA CONTROL SDK INTEGRATION (Windows 64-bit)
+ * Hỗ trợ FUJIFILM X-T4 và các dòng mirrorless Fujifilm
+ * ========================================================================
+ */
+const fujiConfig = config.fujifilm || {
+  url: 'http://127.0.0.1:5514',
+  binPath: path.join(__dirname, 'bin', 'fujifilm_win64', 'fuji_bridge.exe'),
+  timeoutMs: 12000,
+  photoSaveDir: defaultPhotosDir,
+  autoFocus: true
+};
+
+let cachedFujiExePath = null;
+
+function getFujiBridgeExe() {
+  if (cachedFujiExePath && fs.existsSync(cachedFujiExePath)) {
+    return cachedFujiExePath;
+  }
+
+  const customPath = fujiConfig.binPath ? path.resolve(__dirname, fujiConfig.binPath) : null;
+  if (customPath && fs.existsSync(customPath)) {
+    cachedFujiExePath = customPath;
+    return customPath;
+  }
+
+  const defaultExe = path.join(__dirname, 'bin', 'fujifilm_win64', 'fuji_bridge.exe');
+  if (fs.existsSync(defaultExe)) {
+    cachedFujiExePath = defaultExe;
+    return defaultExe;
+  }
+
+  // Tự động biên dịch FujiBridge.cs thành fuji_bridge.exe trên Windows nếu có csc.exe
+  const csSource = path.join(__dirname, 'bin', 'fujifilm_win64', 'FujiBridge.cs');
+  if (fs.existsSync(csSource)) {
+    const cscCandidates = [
+      'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe',
+      'C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'
+    ];
+    for (const csc of cscCandidates) {
+      if (fs.existsSync(csc)) {
+        try {
+          console.log(`[Bridge] ⚙️ Đang tự động biên dịch fuji_bridge.exe bằng ${csc}...`);
+          require('child_process').execSync(
+            `"${csc}" /target:exe /platform:x64 /optimize+ /out:"${defaultExe}" "${csSource}"`,
+            { cwd: path.dirname(defaultExe), timeout: 15000, stdio: ['pipe', 'pipe', 'ignore'] }
+          );
+          if (fs.existsSync(defaultExe)) {
+            console.log(`[Bridge] ✓ Đã tự động tạo fuji_bridge.exe thành công!`);
+            cachedFujiExePath = defaultExe;
+            return defaultExe;
+          }
+        } catch (compErr) {
+          console.warn(`[Bridge] Thông báo biên dịch fuji_bridge: ${compErr.message}`);
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Kiểm tra trạng thái máy ảnh Fujifilm qua Daemon HTTP (5514) hoặc fuji_bridge.exe CLI
+ */
+async function checkFujifilmStatus() {
+  const daemonUrl = fujiConfig.url || 'http://127.0.0.1:5514';
+
+  // 1. Thử HTTP Daemon (port 5514)
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    const res = await fetch(`${daemonUrl}/api/status`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        online: true,
+        cameraConnected: Boolean(data.connected || data.cameraConnected),
+        cameraName: data.cameraName || data.model || 'FUJIFILM X-T4',
+        model: data.model || 'FUJIFILM X-T4',
+        method: 'daemon',
+        serverUrl: daemonUrl
+      };
+    }
+  } catch (e) {}
+
+  // 2. Thử CLI fuji_bridge.exe status
+  const fujiExe = getFujiBridgeExe();
+  if (fujiExe) {
+    try {
+      const output = await new Promise((resolve, reject) => {
+        execFile(fujiExe, ['status'], { timeout: 3000, cwd: path.dirname(fujiExe) }, (err, stdout) => {
+          if (err) return reject(err);
+          resolve(stdout);
+        });
+      });
+      const data = JSON.parse(output.trim());
+      return {
+        online: true,
+        cameraConnected: Boolean(data.connected),
+        cameraName: data.cameraName || data.model || 'FUJIFILM X-T4',
+        model: data.model || 'FUJIFILM X-T4',
+        method: 'cli',
+        serverUrl: 'CLI (' + path.basename(fujiExe) + ')'
+      };
+    } catch (cliErr) {}
+  }
+
+  return { online: false, cameraConnected: false, cameraName: null, error: 'Fujifilm bridge offline' };
+}
+
+/**
+ * Lấy driver máy ảnh đang hoạt động ('fujifilm', 'digicamcontrol', hoặc 'mock')
+ */
+async function getActiveCameraStatus() {
+  const currentMode = (config.mode || 'auto').toLowerCase();
+
+  if (currentMode === 'mock') {
+    return {
+      driver: 'mock',
+      online: true,
+      cameraConnected: true,
+      cameraName: 'Canon EOS R50 / FUJIFILM X-T4 (Simulated)',
+      resolution: '6000x4000 (24.2 MP)',
+      details: { mode: 'mock' }
+    };
+  }
+
+  if (currentMode === 'fujifilm') {
+    const fujiStatus = await checkFujifilmStatus();
+    return {
+      driver: 'fujifilm',
+      online: fujiStatus.online,
+      cameraConnected: fujiStatus.cameraConnected,
+      cameraName: fujiStatus.cameraName || 'FUJIFILM X-T4',
+      resolution: '6240x4160 (26.1 MP)',
+      details: fujiStatus
+    };
+  }
+
+  if (currentMode === 'digicamcontrol') {
+    const dccStatus = await checkDigiCamControlStatus();
+    return {
+      driver: 'digicamcontrol',
+      online: dccStatus.online,
+      cameraConnected: dccStatus.cameraConnected,
+      cameraName: dccStatus.cameraName || 'Canon EOS Camera',
+      resolution: '6000x4000 (24.2 MP)',
+      details: dccStatus
+    };
+  }
+
+  // Chế độ 'auto' thông minh:
+  // 1. Kiểm tra digiCamControl trước (cho Canon R50)
+  const dccStatus = await checkDigiCamControlStatus();
+  if (dccStatus.online && dccStatus.cameraConnected) {
+    return {
+      driver: 'digicamcontrol',
+      online: true,
+      cameraConnected: true,
+      cameraName: dccStatus.cameraName,
+      resolution: '6000x4000 (24.2 MP)',
+      details: dccStatus
+    };
+  }
+
+  // 2. Kiểm tra FUJIFILM X-T4
+  const fujiStatus = await checkFujifilmStatus();
+  if (fujiStatus.online && fujiStatus.cameraConnected) {
+    return {
+      driver: 'fujifilm',
+      online: true,
+      cameraConnected: true,
+      cameraName: fujiStatus.cameraName || 'FUJIFILM X-T4',
+      resolution: '6240x4160 (26.1 MP)',
+      details: fujiStatus
+    };
+  }
+
+  // Nếu cả hai chưa cắm máy ảnh, trả về driver của phần mềm đang chạy
+  if (dccStatus.online) {
+    return {
+      driver: 'digicamcontrol',
+      online: true,
+      cameraConnected: false,
+      cameraName: dccStatus.cameraName || 'Canon EOS (Chờ kết nối)',
+      resolution: '6000x4000 (24.2 MP)',
+      details: dccStatus
+    };
+  }
+
+  if (fujiStatus.online) {
+    return {
+      driver: 'fujifilm',
+      online: true,
+      cameraConnected: false,
+      cameraName: fujiStatus.cameraName || 'FUJIFILM X-T4 (Chờ kết nối)',
+      resolution: '6240x4160 (26.1 MP)',
+      details: fujiStatus
+    };
+  }
+
+  return {
+    driver: 'none',
+    online: false,
+    cameraConnected: false,
+    cameraName: 'Chưa nhận diện máy ảnh (Hỗ trợ Canon EOS R50 & FUJIFILM X-T4)',
+    resolution: 'Chưa xác định',
+    details: { dcc: dccStatus, fuji: fujiStatus }
+  };
+}
+
+/**
+ * Kích hoạt lấy nét tự động (Autofocus) cho Fujifilm
+ */
+async function triggerFujiFocus() {
+  const daemonUrl = fujiConfig.url || 'http://127.0.0.1:5514';
+  try {
+    const res = await fetch(`${daemonUrl}/api/focus`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, message: data.message || 'Đã kích hoạt autofocus Fujifilm', method: 'daemon' };
+    }
+  } catch (e) {}
+
+  const fujiExe = getFujiBridgeExe();
+  if (fujiExe) {
+    return new Promise((resolve) => {
+      execFile(fujiExe, ['focus'], { timeout: 4000, cwd: path.dirname(fujiExe) }, (err, stdout) => {
+        if (err) return resolve({ success: false, error: err.message });
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          resolve(parsed);
+        } catch (pe) {
+          resolve({ success: true, output: stdout.trim() });
+        }
+      });
+    });
+  }
+  return { success: false, error: 'Không tìm thấy fuji_bridge.exe hoặc daemon Fujifilm' };
+}
+
+/**
+ * Kích hoạt màn trập và tải file ảnh gốc 26.1MP từ Fujifilm
+ */
+async function triggerFujiCapture(orderCode, targetFolder, autoFocus = true) {
+  const daemonUrl = fujiConfig.url || 'http://127.0.0.1:5514';
+
+  // 1. Thử qua HTTP Daemon
+  try {
+    const res = await fetch(`${daemonUrl}/api/capture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderCode, photoSaveDir: targetFolder, autoFocus }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        return data;
+      }
+    }
+  } catch (daemonErr) {
+    console.warn(`[Bridge] Fuji daemon notice (${daemonErr.message}), gọi CLI fuji_bridge.exe...`);
+  }
+
+  // 2. Thử qua CLI fuji_bridge.exe
+  const fujiExe = getFujiBridgeExe();
+  if (!fujiExe) {
+    throw new Error('Không tìm thấy fuji_bridge.exe và daemon Fujifilm không phản hồi');
+  }
+
+  const cliArgs = ['capture', targetFolder, orderCode];
+  if (!autoFocus) cliArgs.push('--no-af');
+
+  return new Promise((resolve, reject) => {
+    execFile(fujiExe, cliArgs, { timeout: 15000, maxBuffer: 50 * 1024 * 1024, cwd: path.dirname(fujiExe) }, (err, stdout, stderr) => {
+      if (err) {
+        return reject(new Error(`Lỗi chạy fuji_bridge.exe: ${err.message}`));
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim());
+        if (parsed.success) {
+          resolve(parsed);
+        } else {
+          reject(new Error(parsed.message || parsed.error || 'Chụp ảnh Fujifilm thất bại'));
+        }
+      } catch (pe) {
+        reject(new Error(`Không thể giải mã kết quả từ fuji_bridge: ${stdout.substring(0, 200)}`));
+      }
+    });
+  });
+}
+
 // Trạng thái theo dõi kết nối máy ảnh tự động
 let isCameraConnected = false;
 let lastKnownCameraName = '';
@@ -300,37 +603,42 @@ let isCheckingReconnect = false;
 /**
  * Watchdog tự động phát hiện mất kết nối và kết nối lại từ đầu:
  * - Khi mất kết nối: không exit, chuyển sang chế độ chờ kết nối lại.
- * - Khi cắm lại USB / bật lại máy ảnh: tự động dò tìm IP, kết nối lại từ đầu, cấu hình lại session và bật lại Live View.
+ * - Khi cắm lại USB / bật lại máy ảnh: tự động dò tìm, kết nối lại từ đầu.
  */
 async function monitorAndAutoReconnectCamera() {
   if (isCheckingReconnect) return;
   isCheckingReconnect = true;
 
   try {
-    const status = await checkDigiCamControlStatus();
+    const active = await getActiveCameraStatus();
 
-    if (status.online && status.cameraConnected) {
-      if (!isCameraConnected) {
+    if (active.online && active.cameraConnected) {
+      if (!isCameraConnected || lastKnownCameraName !== active.cameraName) {
         console.log('\n========================================================================');
-        console.log(`[Bridge] 🔄 [KẾT NỐI LẠI THÀNH CÔNG] Đã phát hiện máy ảnh: "${status.cameraName}" tại ${status.serverUrl}`);
-        console.log('[Bridge] Tiến hành thiết lập lại kết nối và cấu hình session từ đầu...');
+        console.log(`[Bridge] 🔄 [KẾT NỐI LẠI THÀNH CÔNG] Đã phát hiện máy ảnh: "${active.cameraName}" (Driver: ${active.driver.toUpperCase()})`);
+        if (active.driver === 'digicamcontrol') {
+          console.log('[Bridge] Tiến hành thiết lập lại kết nối và cấu hình session digiCamControl từ đầu...');
+        } else if (active.driver === 'fujifilm') {
+          console.log('[Bridge] Máy ảnh FUJIFILM sẵn sàng: Màn trập cơ học, AF & Flash studio.');
+        }
         console.log('========================================================================');
         isCameraConnected = true;
-        lastKnownCameraName = status.cameraName;
+        lastKnownCameraName = active.cameraName;
         dccSessionConfigured = false;
 
-        // Cấu hình lại session (thư mục lưu ảnh và transfer mode)
-        await configureDigiCamControlSession(true);
-
-        // Đánh thức Live View & Focus
-        triggerAutoLiveViewStart(status.serverUrl);
-      } else if (!dccSessionConfigured) {
+        if (active.driver === 'digicamcontrol') {
+          // Cấu hình lại session (thư mục lưu ảnh và transfer mode)
+          await configureDigiCamControlSession(true);
+          // Đánh thức Live View & Focus
+          triggerAutoLiveViewStart(active.details?.serverUrl);
+        }
+      } else if (active.driver === 'digicamcontrol' && !dccSessionConfigured) {
         await configureDigiCamControlSession();
       }
     } else {
       if (isCameraConnected) {
         console.warn('\n========================================================================');
-        console.warn(`[Bridge] ⚠️ [MẤT KẾT NỐI] Mất kết nối với máy ảnh! (${status.error || status.cameraName || 'Máy ảnh bị ngắt hoặc tắt nguồn'})`);
+        console.warn(`[Bridge] ⚠️ [MẤT KẾT NỐI] Mất kết nối với máy ảnh! (${lastKnownCameraName || 'Máy ảnh bị ngắt hoặc tắt nguồn'})`);
         console.warn('[Bridge] Hệ thống sẽ giữ Bridge hoạt động và tự động kết nối lại ngay khi máy ảnh được cắm lại.');
         console.warn('========================================================================\n');
         isCameraConnected = false;
@@ -339,7 +647,7 @@ async function monitorAndAutoReconnectCamera() {
     }
   } catch (err) {
     if (isCameraConnected) {
-      console.warn(`[Bridge] ⚠️ [MẤT KẾT NỐI] Lỗi kết nối tới digiCamControl: ${err.message}`);
+      console.warn(`[Bridge] ⚠️ [MẤT KẾT NỐI] Lỗi watchdog: ${err.message}`);
       isCameraConnected = false;
       dccSessionConfigured = false;
     }
@@ -357,28 +665,37 @@ setInterval(monitorAndAutoReconnectCamera, 2500);
  * Used by Room Kiosk to verify bridge & camera status
  */
 app.get('/api/status', async (req, res) => {
-  const dccStatus = await checkDigiCamControlStatus();
+  const activeStatus = await getActiveCameraStatus();
   
-  // Auto-configure session if not yet done and digiCamControl is online
-  if (dccStatus.online && !dccSessionConfigured) {
+  // Auto-configure session if digiCamControl is active
+  if (activeStatus.driver === 'digicamcontrol' && activeStatus.online && !dccSessionConfigured) {
     await configureDigiCamControlSession();
   }
 
-  if (dccStatus.cameraConnected && !isCameraConnected) {
+  if (activeStatus.cameraConnected && !isCameraConnected) {
     isCameraConnected = true;
-    lastKnownCameraName = dccStatus.cameraName;
+    lastKnownCameraName = activeStatus.cameraName;
+  }
+
+  let sourceDesc = config.mode;
+  if (activeStatus.driver === 'fujifilm') {
+    sourceDesc = `FUJIFILM Camera Control SDK 64-bit (${activeStatus.details?.serverUrl || 'Native'})`;
+  } else if (activeStatus.driver === 'digicamcontrol') {
+    sourceDesc = activeStatus.online ? `digiCamControl (${activeStatus.details?.serverUrl})` : 'digiCamControl (Offline)';
   }
 
   res.json({
     success: true,
     bridgeOnline: true,
-    version: '1.2.0-AutoReconnect',
+    version: '1.3.0-DualCamera',
     mode: config.mode,
+    activeDriver: activeStatus.driver,
     camera: {
-      connected: dccStatus.cameraConnected || config.mode === 'mock',
-      name: dccStatus.cameraName || (config.mode === 'mock' ? 'Canon EOS R50 (Simulated)' : 'Chưa nhận diện máy ảnh (Đang chờ kết nối lại)'),
-      source: dccStatus.online ? `digiCamControl (${dccStatus.serverUrl})` : config.mode,
-      details: dccStatus
+      connected: activeStatus.cameraConnected || config.mode === 'mock',
+      name: activeStatus.cameraName || (config.mode === 'mock' ? 'Canon EOS R50 / FUJIFILM X-T4 (Simulated)' : 'Chưa nhận diện máy ảnh (Đang chờ kết nối lại)'),
+      source: sourceDesc,
+      resolution: activeStatus.resolution,
+      details: activeStatus.details
     },
     autoReconnect: {
       enabled: true,
@@ -417,15 +734,31 @@ app.get('/api/liveview/stop', async (req, res) => {
   }
 });
 
-// 🎯 API Kích hoạt Lấy Nét Tự Động (Dual Pixel AF / Focus Lock) cho Canon EOS R50
+// 🎯 API Kích hoạt Lấy Nét Tự Động (Dual Pixel AF cho Canon / Contrast & Phase AF cho Fujifilm)
 app.all('/api/focus', async (req, res) => {
-  console.log(`[Bridge] 🎯 Nhận lệnh lấy nét (Focus) cho Canon EOS R50...`);
+  console.log(`[Bridge] 🎯 Nhận lệnh lấy nét (Focus) từ Kiosk...`);
   try {
     if (config.mode === 'mock' || req.query.mock === 'true') {
       console.log('[Bridge] Mock Mode: Mô phỏng lấy nét thành công.');
-      return res.json({ success: true, message: 'Mock Canon R50 autofocus triggered' });
+      return res.json({ success: true, message: 'Mock autofocus triggered' });
     }
 
+    const activeStatus = await getActiveCameraStatus();
+
+    // 1. FUJIFILM DRIVER
+    if (activeStatus.driver === 'fujifilm') {
+      console.log(`[Bridge] 🎯 Đang kích hoạt lấy nét (Fujifilm AF) cho ${activeStatus.cameraName}...`);
+      const fujiRes = await triggerFujiFocus();
+      return res.json({
+        success: fujiRes.success,
+        message: fujiRes.message || 'Đã kích hoạt autofocus FUJIFILM',
+        cameraName: activeStatus.cameraName,
+        method: fujiRes.method || 'fujifilm_sdk'
+      });
+    }
+
+    // 2. DIGICAMCONTROL / CANON DRIVER
+    console.log(`[Bridge] 🎯 Kích hoạt autofocus (Dual Pixel AF) cho Canon EOS R50...`);
     const dccUrl = cachedWorkingDccUrl || config.digicamcontrol?.url || 'http://127.0.0.1:5513';
     let focused = false;
     let methodUsed = '';
@@ -646,7 +979,7 @@ async function triggerViaHttp(dccUrl, noAf = false) {
  * Trigger Physical Camera Shutter & Capture High-Res 24MP Photo
  */
 app.post('/api/capture', async (req, res) => {
-  const { orderCode = 'LALE', roomId = '1' } = req.body || {};
+  const { orderCode = 'LALE', roomId = '1', autoFocus } = req.body || {};
   console.log(`[Bridge] Received capture trigger for Order: ${orderCode}, Room: ${roomId}`);
 
   const startTime = Date.now();
@@ -676,7 +1009,7 @@ app.post('/api/capture', async (req, res) => {
             🌸 LALÉ PHOTO STUDIO
           </text>
           <text x="3000" y="2100" font-size="110" font-weight="bold" fill="#f43f5e" text-anchor="middle" font-family="sans-serif">
-            CANON EOS R50 • 24.2 MEGAPIXELS (6000 x 4000)
+            CANON EOS R50 / FUJIFILM X-T4 • HIGH-RES PHOTOBOTH
           </text>
           <text x="3000" y="2350" font-size="80" fill="#cbd5e1" text-anchor="middle" font-family="monospace">
             ĐƠN HÀNG: ${orderCode} • THỜI GIAN: ${new Date().toLocaleString('vi-VN')}
@@ -690,7 +1023,7 @@ app.post('/api/capture', async (req, res) => {
       const base64Data = `data:image/svg+xml;base64,${Buffer.from(mockSvg).toString('base64')}`;
       return res.json({
         success: true,
-        source: 'Mock Canon EOS R50',
+        source: 'Mock Camera',
         filename: `${orderCode}_${Date.now()}_original.jpg`,
         imageData: base64Data,
         resolution: '6000x4000',
@@ -698,7 +1031,44 @@ app.post('/api/capture', async (req, res) => {
       });
     }
 
-    // 2. DIGICAMCONTROL INTEGRATION (Default on Windows Kiosk)
+    // 2. CHECK ACTIVE CAMERA DRIVER (Auto-detect Canon EOS R50 vs FUJIFILM X-T4)
+    const activeCamera = await getActiveCameraStatus();
+
+    // 2A. FUJIFILM INTEGRATION (26.1 MP X-Trans CMOS 4)
+    if (activeCamera.driver === 'fujifilm') {
+      if (!activeCamera.cameraConnected) {
+        console.warn(`[Bridge] Lệnh chụp Fujifilm bị từ chối: Mất kết nối USB`);
+        return res.status(503).json({
+          success: false,
+          cameraDisconnected: true,
+          message: 'Máy ảnh FUJIFILM chưa được kết nối hoặc bị ngắt kết nối USB. Bridge đang tự động dò tìm lại...',
+          elapsedMs: Date.now() - startTime
+        });
+      }
+
+      console.log(`[Bridge] 📸 Kích nổ màn trập cơ học FUJIFILM X-T4 & Flash Studio...`);
+      const targetFolder = defaultPhotosDir.replace(/\//g, '\\');
+      const shouldAf = autoFocus !== false;
+      const fujiResult = await triggerFujiCapture(orderCode, targetFolder, shouldAf);
+
+      if (fujiResult.filePath) {
+        lastCapturedFile = fujiResult.filePath;
+      }
+
+      return res.json({
+        success: true,
+        source: fujiResult.source || 'FUJIFILM X-T4 Original File',
+        cameraName: activeCamera.cameraName || 'FUJIFILM X-T4',
+        filename: fujiResult.filename,
+        imageData: fujiResult.imageData,
+        fileSizeBytes: fujiResult.fileSizeBytes,
+        fileSizeMb: fujiResult.fileSizeMb,
+        resolution: fujiResult.resolution || '6240x4160 (26.1 MP)',
+        elapsedMs: Date.now() - startTime
+      });
+    }
+
+    // 2B. DIGICAMCONTROL INTEGRATION (Default on Windows Kiosk for Canon EOS R50)
     const dccCheck = await checkDigiCamControlStatus();
     if (!dccCheck.online || !dccCheck.cameraConnected) {
       console.warn(`[Bridge] Lệnh chụp bị từ chối: Mất kết nối máy ảnh (${dccCheck.error || dccCheck.cameraName || 'Offline'})`);
@@ -939,15 +1309,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 🌸 LALÉ STUDIO - HARDWARE CAMERA BRIDGE (AUTO-RECONNECT)
 ========================================================================
 ✓ Bridge Server running on http://127.0.0.1:${PORT}
-✓ Mode: ${config.mode.toUpperCase()}
-✓ digiCamControl Port: ${config.digicamcontrol?.url || 'http://127.0.0.1:5513'}
+✓ Mode: ${config.mode.toUpperCase()} (Hỗ trợ Canon EOS R50 & FUJIFILM X-T4)
+✓ Canon digiCamControl: ${config.digicamcontrol?.url || 'http://127.0.0.1:5513'}
+✓ Fujifilm SDK (64-bit): Port ${fujiConfig.url || '5514'} / bin/fujifilm_win64
 ✓ Photo Watch Folder: ${absWatchDir}
 ✓ Status API: http://127.0.0.1:${PORT}/api/status
 ✓ Trigger API: http://127.0.0.1:${PORT}/api/capture
 ✓ Focus API: http://127.0.0.1:${PORT}/api/focus
 ✓ Auto-Reconnect: Đang bật (tự động kết nối lại khi cắm lại máy ảnh)
 ========================================================================
-Ready to trigger Canon R50 physical shutter & Studio Flash!
+Sẵn sàng kích nổ màn trập cơ học Canon EOS R50, FUJIFILM X-T4 & Flash Studio!
   `);
 });
 

@@ -1,0 +1,8 @@
+node_modules/
+fujifilm_sdk/
+.env
+.DS_Store
+bin/fujifilm_win64/*.exe
+bin/fujifilm_win64/*.pdb
+bin/fujifilm_win64/*.exe
+bin/fujifilm_win64/*.pdb

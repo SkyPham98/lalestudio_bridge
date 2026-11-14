@@ -1,89 +1,105 @@
-# 🌸 LALÉ STUDIO - HARDWARE CAMERA BRIDGE
-> Cầu nối phần cứng điều khiển Máy ảnh Canon EOS R50, Màn trập cơ học & Đèn Flash Studio cho phòng chụp Kiosk (`/room/[roomId]`).
+# 🌸 LALÉ STUDIO - HARDWARE CAMERA BRIDGE (DUAL CAMERA: CANON & FUJIFILM)
+> Cầu nối phần cứng điều khiển Máy ảnh **Canon EOS R50** (24.2 MP) và **FUJIFILM X-T4** (26.1 MP), kích nổ Màn trập cơ học & Đèn Flash Studio cho phòng chụp Kiosk (`/room/[roomId]`).
 
 ---
 
-## 📸 Tổng Quan Giải Pháp (Phương Án 2)
+## 📸 Tổng Quan Hệ Thống
 
-Hệ thống cho phép:
-1. **Live View mượt mà (30fps)**: Khách đứng trước màn hình Kiosk soi gương và tạo dáng như bình thường.
-2. **1 Nút bấm Remote duy nhất**: Khách bấm Remote Bluetooth -> Màn hình đếm ngược **3... 2... 1...**
-3. **Màn trập cơ học nhảy thật**: Hết 3 giây, Bridge kích hoạt máy ảnh Canon qua USB.
-4. **Đèn Flash Studio nổ chớp sáng**: Chân Hotshoe máy ảnh truyền tín hiệu tới Cục phát Trigger (Godox) -> Kích nổ đèn Flash Studio.
-5. **Ảnh gốc 24.2 Megapixel (6000 x 4000)**: File ảnh chất lượng cao nhất lưu về máy tính và tải lên hệ thống Lalé Studio, in photostrip sắc nét chuẩn Studio chuyên nghiệp.
+Hệ thống Lalé Camera Bridge hỗ trợ song song 2 dòng máy ảnh hàng đầu cho photobooth chuyên nghiệp:
+1. **Canon EOS R50** (Cảm biến APS-C 24.2 Megapixel 6000 x 4000) qua digiCamControl & IPC Direct.
+2. **FUJIFILM X-T4** (Cảm biến X-Trans CMOS 4 26.1 Megapixel 6240 x 4160) qua Fujifilm Camera Control SDK chính hãng (Windows 64-bit Native).
+
+Cả hai dòng máy đều đáp ứng đầy đủ tiêu chuẩn Studio:
+- **Live View mượt mà**: 1080p 60fps qua HDMI Capture Card (hoặc USB stream) để khách soi gương tạo dáng.
+- **Tự động lấy nét (Autofocus Lock)**: Dual Pixel AF (Canon) hoặc Phase/Contrast AF (Fujifilm) khóa nét vào khuôn mặt/mắt khách trước khi chụp.
+- **Màn trập cơ học nhảy thật**: Kéo cò cơ học bảo toàn dải tương phản (Dynamic Range) và màu sắc gốc.
+- **Kích nổ Flash Studio đồng bộ 100%**: Qua chân Hotshoe đỉnh máy ảnh kết nối Cục phát Trigger không dây (Godox).
+- **Tải ảnh gốc siêu nét tức thì**: Ảnh gốc nguyên bản (24.2MP hoặc 26.1MP) lưu thẳng về PC phòng chụp (`C:\LalePhotos`), đẩy lên hệ thống để khách in photostrip sắc nét.
 
 ---
 
-## 🛠 Hướng Dẫn Cài Đặt Trên Máy Tính Kiosk Phòng Chụp (Windows)
+## ⚙️ Cơ Chế Tự Động Nhận Diện Máy Ảnh ("mode": "auto")
 
-### Bước 1: Cài đặt phần mềm digiCamControl (Miễn phí 100%)
-1. Tải và cài đặt phần mềm **digiCamControl**: [http://digicamcontrol.com/download](http://digicamcontrol.com/download)
-2. Mở phần mềm digiCamControl:
+Trong file `config.json`, chế độ mặc định được thiết lập là `"mode": "auto"`:
+- **Khi phòng chụp dùng Canon EOS R50**: Bridge tự động kết nối qua digiCamControl (port 5513 / IPC Named Pipe). Vận hành 100% như cũ, không thay đổi bất kỳ thao tác nào!
+- **Khi phòng chụp chuyển sang FUJIFILM X-T4**: Bridge tự động chuyển sang driver Fujifilm SDK (64-bit native), kết nối trực tiếp với camera qua cổng USB Tether.
+- Nếu muốn cố định 1 dòng máy, bạn có thể chỉnh `"mode": "digicamcontrol"` hoặc `"mode": "fujifilm"`.
+
+---
+
+## 🛠 Hướng Dẫn Cài Đặt Chi Tiết Cho Từng Dòng Máy
+
+---
+
+### A. Đối Với Máy Ảnh FUJIFILM X-T4 (Windows 64-bit)
+
+#### 1. Cài đặt trên thân máy ảnh FUJIFILM X-T4:
+1. **Chế độ kết nối PC**:
+   - Bấm nút `MENU/OK` -> biểu tượng Cờ lê (`SET UP`) -> `CONNECTION SETTING`.
+   - Chọn `PC CONNECTION MODE` -> chọn **`USB TETHER SHOOTING AUTO`**.
+2. **Chế độ lấy nét**:
+   - Gạt cần lấy nét ở mặt trước máy sang vị trí **`S`** (Single AF) hoặc **`C`** (Continuous AF).
+3. **Cài đặt thông số chụp studio (Manual Mode)**:
+   - Xoay bánh xe chế độ hoặc vòng tốc độ/khẩu độ sang `M`:
+     - *Khẩu độ (Aperture)*: f/8.0 – f/11 (để chụp nhóm khách nét đều từ trước ra sau).
+     - *Tốc độ (Shutter Speed)*: 1/160s hoặc 1/180s (tốc độ ăn đèn flash chuẩn của X-T4).
+     - *ISO*: 160 (ISO gốc của X-T4) hoặc 200.
+4. **Xuất hình sạch Clean HDMI ra màn hình soi gương (Capture Card)**:
+   - Menu Cài đặt Phim (`MOVIE SETTING`) -> `HDMI OUTPUT INFO DISPLAY` -> chọn **`OFF`** (tắt toàn bộ icon để màn hình Kiosk sạch đẹp như gương).
+5. **Đèn Flash Studio**:
+   - Gắn cục phát trigger **Godox X2T-F** hoặc **Godox XPro-F** (phiên bản dành riêng cho Fujifilm, chân đế chuẩn Fuji) lên khe Hotshoe trên đỉnh máy.
+
+#### 2. Cấu trúc bộ SDK Fujifilm trên máy tính phòng chụp:
+SDK đã được tích hợp sẵn đầy đủ trong thư mục `bin/fujifilm_win64/`:
+- `XAPI.dll`, `FTLPTP.dll`, `FTLPTPIP.dll`: Thư viện lõi SDK 64-bit.
+- `FF0014API.dll`: Thư viện điều khiển dòng máy FUJIFILM X-T4.
+- `XSDK.DAT`: File cấu hình nhận diện thiết bị của hãng.
+- `FujiBridge.cs`: Mã nguồn C# giao tiếp P/Invoke với XAPI.dll.
+- `build_fuji_bridge.bat`: File biên dịch tự động ra `fuji_bridge.exe` bằng trình biên dịch `csc.exe` có sẵn trong Windows (không cần cài thêm bất cứ gì).
+
+#### 3. Khởi chạy:
+- Chạy Bridge chính: Nhấp đúp chuột vào `start_bridge.bat` hoặc `start_bridge_windows_native.bat`.
+- *(Tùy chọn)* Nếu muốn chạy riêng Daemon kết nối liên tục với Fujifilm: Nhấp đúp vào `start_fuji_daemon.bat` (chạy trên port 5514).
+
+---
+
+### B. Đối Với Máy Ảnh Canon EOS R50 (Giữ Nguyên Như Cũ 100%)
+
+#### 1. Cài đặt phần mềm digiCamControl:
+1. Mở phần mềm **digiCamControl**:
    - Vào menu **File > Settings > Webserver**.
    - Tích chọn: **[x] Enable web server**.
    - Cổng mặc định: **5513**.
-   - Thư mục lưu ảnh (Session Folder): Đặt là `C:\LalePhotos` (hoặc thư mục tùy chọn).
-   - Bấm **Save** và khởi động lại digiCamControl.
+   - Tích chọn: **[x] Allow interaction via webserver**.
+   - Thư mục lưu ảnh: `C:\LalePhotos`.
 
-### Bước 2: Kết nối Máy ảnh Canon EOS R50
+#### 2. Kết nối máy ảnh Canon EOS R50:
 1. Cắm cáp USB Type-C từ Canon R50 vào cổng USB 3.0 của máy tính.
-2. Trên Menu máy ảnh Canon R50:
-   - Tab Cài đặt (Icon cái cờ lê màu vàng) > **Choose USB connection app** > Chọn **Photo import/Remote control** (hoặc **PC connection**).
-   - Xoay bánh xe chế độ chụp sang **M (Manual)** hoặc **Av/P**:
-     - *Khẩu độ (Aperture)*: f/8.0 - f/11 (để chụp nhóm nhiều người không bị mờ hậu cảnh).
-     - *Tốc độ (Shutter Speed)*: 1/160s hoặc 1/200s (tốc độ đồng bộ flash chuẩn của Canon).
-     - *ISO*: 100 hoặc 200.
-3. Gắn cục phát sóng Flash (**Godox X2T-C** hoặc **Godox Xpro-C**) lên chân Hotshoe trên đỉnh máy ảnh. Bật nguồn trigger và đèn flash studio cùng kênh (Channel) và nhóm (Group).
-
-### Bước 3: Chạy Lalé Camera Bridge
-
-Bạn có thể chọn **1 trong 2 cách** tùy theo máy tính của bạn:
-
-- **Cách 1 (Khuyên dùng - KHÔNG CẦN CÀI ĐẶT NODE.JS)**:
-  - Máy tính Windows 10/11 thông thường **không cần cài Node.js hay bất cứ thư viện nào**.
-  - Nhấp đúp chuột vào file:
-    ```cmd
-    start_bridge_windows_native.bat
-    ```
-  - File sẽ tự động chạy trực tiếp bằng Windows PowerShell & .NET có sẵn trên mọi máy Windows, mở cổng `4000` ngay tức thì.
-
-- **Cách 2 (Nếu máy đã có sẵn Node.js)**:
-  - Nhấp đúp file:
-    ```cmd
-    start_bridge.bat
-    ```
-
-### Bước 4: Kích hoạt trên Giao diện Phòng Chụp
-1. Mở trang Kiosk phòng chụp: `http://localhost:3000/room/1`
-2. Bấm vào nút **Cấu hình máy ảnh** (góc trên bên phải hoặc màn hình chờ).
-3. Tại mục **Cơ chế chụp ảnh**: Chọn **Máy ảnh Thật & Flash Studio (DSLR Bridge)**.
-4. Bấm **Kiểm tra kết nối Bridge**: Hệ thống sẽ hiển thị trạng thái `Canon EOS R50 (Sẵn sàng chụp 24MP & Flash)`.
-5. Bấm **Thử chụp có Flash**: Đèn flash sẽ chớp sáng và ảnh mẫu 24MP sẽ hiển thị ngay lập tức!
+2. Menu máy ảnh Canon: Tab Cài đặt (cờ lê vàng) > **Choose USB connection app** > Chọn **Photo import/Remote control**.
+3. Bánh xe chế độ: **M (Manual)**:
+   - Khẩu độ: f/8.0 – f/11.
+   - Tốc độ: 1/160s hoặc 1/200s.
+   - ISO: 100 hoặc 200.
+4. Gắn trigger **Godox X2T-C** hoặc **Godox XPro-C** (phiên bản Canon) lên khe Hotshoe.
 
 ---
 
-## ⚙️ Các Chế Độ Cấu Hình Trong `config.json`
+## 🚀 Các File Khởi Động Nhanh (Windows)
 
-File `config.json`:
-```json
-{
-  "port": 4000,
-  "mode": "digicamcontrol",
-  "digicamcontrol": {
-    "url": "http://127.0.0.1:5513",
-    "timeoutMs": 12000,
-    "photoSaveDir": "C:\\LalePhotos"
-  },
-  "hotfolder": {
-    "enabled": false,
-    "watchDir": "./captured_photos"
-  },
-  "mock": {
-    "enabled": false
-  }
-}
-```
+| Tên File | Công Dụng |
+| :--- | :--- |
+| **`start_bridge.bat`** | Khởi chạy Bridge đa luồng (Node.js) hỗ trợ tự động cả Canon và Fujifilm. |
+| **`start_bridge_windows_native.bat`** | Bản Native PowerShell chạy trực tiếp trên Windows mà **không cần cài Node.js**. |
+| **`start_fuji_daemon.bat`** | Khởi chạy tiến trình nền Fujifilm SDK Daemon (port 5514) duy trì kết nối USB liên tục. |
+| **`bin/fujifilm_win64/build_fuji_bridge.bat`** | Biên dịch `FujiBridge.cs` thành `fuji_bridge.exe` 64-bit độc lập. |
 
-- `"mode": "digicamcontrol"`: Kết nối tự động với digiCamControl qua HTTP API port 5513.
-- `"mode": "hotfolder"`: Dùng cho Canon EOS Utility hoặc bất kỳ phần mềm tethering nào (tự động theo dõi thư mục ảnh mới).
-- `"mode": "mock"`: Dùng để lập trình / kiểm thử offline khi không cắm máy ảnh thật.
+---
+
+## 🌐 Danh Sách API Của Bridge (Port 4000)
+
+| Endpoint | Method | Chức Năng |
+| :--- | :--- | :--- |
+| `/api/status` | `GET` | Kiểm tra trạng thái máy ảnh hiện tại, trả về camera name (`FUJIFILM X-T4` hoặc `Canon EOS R50`), trạng thái kết nối và driver đang hoạt động. |
+| `/api/focus` | `ALL` | Kích hoạt lấy nét tự động (Dual Pixel AF cho Canon hoặc Contrast/Phase AF cho Fujifilm). |
+| `/api/capture` | `POST` | Kích nổ màn trập cơ học, kích nổ đèn Flash Studio, tải file ảnh gốc (26.1MP hoặc 24.2MP) lưu vào ổ đĩa và trả về dữ liệu Base64 cho Kiosk. |
+| `/api/liveview/stream` | `GET` | Luồng ảnh Liveview MJPEG từ cảm biến máy ảnh (chế độ USB Live View). |

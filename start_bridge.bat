@@ -1,9 +1,9 @@
 @echo off
-title Lale Studio - Hardware Camera Bridge (Canon R50 + Flash)
+title Lale Studio - Hardware Camera Bridge (Canon EOS R50 & FUJIFILM X-T4)
 color 0b
 echo ========================================================================
 echo  LALE PHOTO STUDIO - HARDWARE CAMERA BRIDGE (AUTO-RECONNECT)
-echo  Dieu khien may anh Canon EOS R50, Man trap co hoc va Den Flash Studio
+echo  Dieu khien may anh Canon EOS R50 & FUJIFILM X-T4, Man trap va Den Flash Studio
 echo ========================================================================
 echo.
 
@@ -16,7 +16,7 @@ if not exist node_modules (
 
 :loop
 echo [INFO] Dang khoi dong Local Camera Bridge tren cong 4000...
-echo [INFO] Vui long dam bao da mo phan mem digiCamControl tren may tinh!
+echo [INFO] Ho tro tu dong nhan dien Canon EOS R50 hoac FUJIFILM X-T4!
 echo.
 
 node server.js

@@ -1,10 +1,17 @@
 {
   "port": 4000,
-  "mode": "digicamcontrol",
+  "mode": "auto",
   "digicamcontrol": {
     "url": "http://127.0.0.1:5513",
     "timeoutMs": 10000,
     "photoSaveDir": "C:\\LalePhotos"
+  },
+  "fujifilm": {
+    "url": "http://127.0.0.1:5514",
+    "binPath": "./bin/fujifilm_win64/fuji_bridge.exe",
+    "timeoutMs": 12000,
+    "photoSaveDir": "C:\\LalePhotos",
+    "autoFocus": true
   },
   "hotfolder": {
     "enabled": false,
