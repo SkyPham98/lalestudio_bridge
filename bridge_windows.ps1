@@ -650,9 +650,6 @@ while ($true) {
                             Send-JsonResponse -response $response -statusCode 503 -jsonObj $errResult
                             continue
                         }
-                            Send-JsonResponse -response $response -statusCode 503 -jsonObj $errResult
-                            continue
-                        }
 
                         # 0. Lấy tên ảnh gần nhất trước khi chụp để so sánh (lastcaptured)
                         $prevLastCaptured = ""
