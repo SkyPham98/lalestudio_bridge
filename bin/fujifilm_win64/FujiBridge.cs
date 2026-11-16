@@ -151,7 +151,7 @@ namespace Lalestudio.FujifilmBridge
                 case 0x1005: return "UNSUPPORTED (Lenh khong duoc ho tro boi dong may nay)";
                 case 0x1006: return "BUSY (May anh dang ban ghi the nho hoac xu ly tac vu khac)";
                 case 0x1007: return "AF_TIMEOUT (Lay net that bai / Khong bat duoc net - Hay bat den studio hoac chuyen sang Manual Focus)";
-                case 0x1008: return "SHOOT_ERROR (Loi co hoc khi bam chup / Khong the nha man trap)";
+                case 0x1008: return "SHOOT_ERROR (May anh tu choi bam chup! Kiem tra: 1. Can gat MOVIE/STILL duoi dia toc do phai o STILL; 2. The nho SD bi khoa/chua cam va SHOOT WITHOUT CARD dang OFF; 3. Vong xoay Drive phai o nac S; 4. AF-S PRIORITY SELECTION nen chon RELEASE)";
                 case 0x1009: return "FRAME_FULL (Bo dem chup cua may anh da day)";
                 case 0x1010: return "STANDBY (May anh dang o che do ngu tiet kiem pin Standby/Sleep)";
                 case 0x1011: return "NODRIVER (Chua cai driver hoac may tinh khong nhan driver Fujifilm)";
@@ -313,7 +313,17 @@ namespace Lalestudio.FujifilmBridge
             if (_setPriorityModeFn != null)
             {
                 int prioRet = _setPriorityModeFn(_hCamera, XSDK_PRIORITY_PC);
-                Log(string.Format("[CONNECT] Thiet lap quyen dieu khien PC (XSDK_SetPriorityMode -> XSDK_PRIORITY_PC): Ret={0} (0 = Thanh cong)", prioRet));
+                if (prioRet != XSDK_COMPLETE && _getErrorNumberFn != null)
+                {
+                    int pApi = 0, pErr = 0;
+                    _getErrorNumberFn(_hCamera, ref pApi, ref pErr);
+                    Log(string.Format("[CONNECT CANH BAO] SetPriorityMode that bai: Ret={0}, ErrCode=0x{1:X} ({2})",
+                        prioRet, pErr, DecodeErrorCode(pErr)));
+                }
+                else
+                {
+                    Log(string.Format("[CONNECT] Thiet lap quyen dieu khien PC (XSDK_SetPriorityMode -> XSDK_PRIORITY_PC): Ret={0} (0 = Thanh cong)", prioRet));
+                }
             }
 
             Log("[CONNECT THANH CONG] May anh Fujifilm da ket noi va san sang hoat dong!");
@@ -430,7 +440,13 @@ namespace Lalestudio.FujifilmBridge
                     int s1Ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
                     string afNote = (status == 1 || status == 5) ? "[OK: Da khoa net]" : (status == 4 ? "[OK: Tieu cu co dinh]" : (status == 2 ? "[Chua kiem tra]" : "[Trang thai: " + status + "]"));
                     Log(string.Format("[FUJI CAPTURE STEP 3/6] Ket qua S1ON: Ret={0}, ShotOpt={1}, AfStatus={2} {3}", s1Ret, shotOpt, status, afNote));
-                    Thread.Sleep(200);
+                    if (s1Ret != XSDK_COMPLETE)
+                    {
+                        // Neu S1ON that bai, huy nua co de may anh khong bi ket trang thai AF
+                        int cancelOpt = 1, cancelStatus = 0;
+                        _releaseFn(_hCamera, XSDK_RELEASE_N_S1OFF, ref cancelOpt, ref cancelStatus);
+                    }
+                    Thread.Sleep(150);
                 }
                 catch (Exception exAf)
                 {
@@ -459,12 +475,21 @@ namespace Lalestudio.FujifilmBridge
                     releaseRet, shotOpt, status));
             }
 
+            // Cach 2b: Thu ReleaseEx chu trinh tron goi (S1_ON_S2_ON_S2_OFF_S1_OFF)
+            if (releaseRet != XSDK_COMPLETE && _releaseExFn != null)
+            {
+                Log("[FUJI CAPTURE STEP 4c] Thu ReleaseEx tron goi (S1_ON_S2_ON_S2_OFF_S1_OFF)...");
+                releaseRet = _releaseExFn(_hCamera, XSDK_RELEASE_EX_S1_ON_S2_ON_S2_OFF_S1_OFF, ref shotOpt, ref status);
+                Log(string.Format("[FUJI CAPTURE STEP 4c] Ket qua ReleaseEx Full: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                    releaseRet, shotOpt, status));
+            }
+
             // Cach 3: Neu van that bai, thu XSDK_RELEASE_SHOOT_S1OFF
             if (releaseRet != XSDK_COMPLETE && _releaseFn != null)
             {
-                Log("[FUJI CAPTURE STEP 4c] Thu phuong thuc XSDK_RELEASE_SHOOT_S1OFF...");
+                Log("[FUJI CAPTURE STEP 4d] Thu phuong thuc XSDK_RELEASE_SHOOT_S1OFF...");
                 releaseRet = _releaseFn(_hCamera, XSDK_RELEASE_SHOOT_S1OFF, ref shotOpt, ref status);
-                Log(string.Format("[FUJI CAPTURE STEP 4c] Ket qua XSDK_RELEASE_SHOOT_S1OFF: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                Log(string.Format("[FUJI CAPTURE STEP 4d] Ket qua XSDK_RELEASE_SHOOT_S1OFF: Ret={0}, ShotOpt={1}, AfStatus={2}",
                     releaseRet, shotOpt, status));
             }
 
