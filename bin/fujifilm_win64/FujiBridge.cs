@@ -446,7 +446,7 @@ namespace Lalestudio.FujifilmBridge
                         int cancelOpt = 1, cancelStatus = 0;
                         _releaseFn(_hCamera, XSDK_RELEASE_N_S1OFF, ref cancelOpt, ref cancelStatus);
                     }
-                    Thread.Sleep(150);
+                    Thread.Sleep(50);
                 }
                 catch (Exception exAf)
                 {
@@ -521,7 +521,6 @@ namespace Lalestudio.FujifilmBridge
 
             while ((DateTime.Now - startWait).TotalSeconds < timeoutSeconds)
             {
-                Thread.Sleep(120);
                 pollCount++;
 
                 if (_readImageInfoFn != null)
@@ -530,7 +529,7 @@ namespace Lalestudio.FujifilmBridge
                     imgInfo.lFormat = XSDK_IMAGEFORMAT_NONE;
                     int readInfoRet = _readImageInfoFn(_hCamera, ref imgInfo);
 
-                    if (pollCount % 8 == 0 || readInfoRet == XSDK_COMPLETE)
+                    if (pollCount == 1 || pollCount % 15 == 0 || readInfoRet == XSDK_COMPLETE)
                     {
                         Log(string.Format("[FUJI CAPTURE STEP 5/6] Dang doi anh... (lan {0}, {1:0.0}s, Ret={2}, Format=0x{3:X}, Size={4} bytes)",
                             pollCount, (DateTime.Now - startWait).TotalSeconds, readInfoRet, imgInfo.lFormat, imgInfo.lDataSize));
@@ -577,6 +576,8 @@ namespace Lalestudio.FujifilmBridge
                         }
                     }
                 }
+
+                Thread.Sleep(30);
             }
 
             int toApiCode = 0, toErrCode = 0;

@@ -418,6 +418,23 @@ function Send-JsonResponse($response, $statusCode, $jsonObj) {
     }
 }
 
+function Send-RawJson($response, $statusCode, [string]$rawJsonString) {
+    try {
+        $buffer = [System.Text.Encoding]::UTF8.GetBytes($rawJsonString)
+        
+        $response.StatusCode = $statusCode
+        $response.ContentType = "application/json; charset=utf-8"
+        $response.Headers.Add("Access-Control-Allow-Origin", "*")
+        $response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        $response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        $response.ContentLength64 = $buffer.Length
+        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+        $response.OutputStream.Close()
+    } catch {
+        try { $response.OutputStream.Close() } catch {}
+    }
+}
+
 function Handle-OptionsRequest($response) {
     try {
         $response.StatusCode = 204
@@ -699,10 +716,14 @@ while ($true) {
                             }
 
                             # 2. Neu Daemon chua chay hoac loi, goi truc tiep qua CLI fuji_bridge.exe
+                            $fujiRawJson = $null
                             if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
                                 # Giai phong bat ky tien trinh fuji_bridge nao dang chiem cong USB de tranh loi 0x1001 SEQUENCE
-                                Get-Process -Name "fuji_bridge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-                                Start-Sleep -Milliseconds 150
+                                $dangling = Get-Process -Name "fuji_bridge" -ErrorAction SilentlyContinue
+                                if ($dangling) {
+                                    $dangling | Stop-Process -Force -ErrorAction SilentlyContinue
+                                    Start-Sleep -Milliseconds 100
+                                }
 
                                 Write-Host "[FUJI BRIDGE STEP 2b] Khoi chay truc tiep CLI: $global:FujiBridgeExe capture..." -ForegroundColor Cyan
                                 try {
@@ -749,10 +770,15 @@ while ($true) {
                                     }
 
                                     if ($out) {
-                                        try {
-                                            $fujiCaptured = $out.Trim() | ConvertFrom-Json
-                                        } catch {
-                                            Write-Host "[FUJI BRIDGE] Khong the giai ma JSON tu CLI: $out" -ForegroundColor Red
+                                        $trimmedOut = $out.Trim()
+                                        if ($trimmedOut.StartsWith("{") -and $trimmedOut.Contains('"success":true')) {
+                                            $fujiRawJson = $trimmedOut
+                                        } else {
+                                            try {
+                                                $fujiCaptured = $trimmedOut | ConvertFrom-Json
+                                            } catch {
+                                                Write-Host "[FUJI BRIDGE] Khong the giai ma JSON tu CLI: $out" -ForegroundColor Red
+                                            }
                                         }
                                     }
                                 } catch {
@@ -761,7 +787,12 @@ while ($true) {
                                 }
                             }
 
-                            if ($fujiCaptured -and $fujiCaptured.success) {
+                            if ($fujiRawJson) {
+                                Write-Host "[FUJI BRIDGE STEP 4/4] CHUP ANH FUJIFILM THANH CONG (STREAM RAW JSON SIEU TOC)!" -ForegroundColor Green
+                                Write-Host "========================================================================" -ForegroundColor Magenta
+                                Send-RawJson -response $response -statusCode 200 -rawJsonString $fujiRawJson
+                                continue
+                            } elseif ($fujiCaptured -and $fujiCaptured.success) {
                                 Write-Host "[FUJI BRIDGE STEP 4/4] CHUP ANH FUJIFILM THANH CONG!" -ForegroundColor Green
                                 Write-Host "  -> File anh goc: $($fujiCaptured.filePath)" -ForegroundColor Green
                                 Write-Host "  -> Do phan giai: $($fujiCaptured.resolution) ($($fujiCaptured.fileSizeMb))" -ForegroundColor Green
