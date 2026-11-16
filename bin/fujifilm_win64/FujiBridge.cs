@@ -428,8 +428,9 @@ namespace Lalestudio.FujifilmBridge
                 try
                 {
                     int s1Ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
-                    Log(string.Format("[FUJI CAPTURE STEP 3/6] Ket qua S1ON: Ret={0}, ShotOpt={1}, AfStatus={2} (1=AF OK, 0=AF Fail)", s1Ret, shotOpt, status));
-                    Thread.Sleep(250);
+                    string afNote = (status == 1 || status == 5) ? "[OK: Da khoa net]" : (status == 4 ? "[OK: Tieu cu co dinh]" : (status == 2 ? "[Chua kiem tra]" : "[Trang thai: " + status + "]"));
+                    Log(string.Format("[FUJI CAPTURE STEP 3/6] Ket qua S1ON: Ret={0}, ShotOpt={1}, AfStatus={2} {3}", s1Ret, shotOpt, status, afNote));
+                    Thread.Sleep(200);
                 }
                 catch (Exception exAf)
                 {

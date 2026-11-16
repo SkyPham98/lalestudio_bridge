@@ -137,19 +137,66 @@ if (Test-Path $global:FujiBridgeExe) {
     Write-Host " [OK] TIM THAY TIEN ICH FUJIFILM BRIDGE: $global:FujiBridgeExe" -ForegroundColor Green
 }
 
+# Ham kiem tra port co dang duoc listen khong (sieu toc, 100ms)
+function Test-PortListening {
+    param ([int]$Port, [int]$TimeoutMs = 150)
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+        $ready = $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+        if ($ready -and $client.Connected) {
+            $client.EndConnect($iar)
+            $client.Close()
+            return $true
+        }
+        $client.Close()
+    } catch {}
+    return $false
+}
+
+# Tu dong khoi chay Fujifilm Background Daemon tren cong 5514 neu chua chay
+function Ensure-FujiDaemonRunning {
+    if (-not $global:FujiBridgeExe -or -not (Test-Path $global:FujiBridgeExe)) { return }
+    if (Test-PortListening -Port 5514 -TimeoutMs 150) { return }
+
+    try {
+        Write-Host " [INFO] Tu dong khoi chay Fujifilm Background Daemon tren cong 5514..." -ForegroundColor Cyan
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $global:FujiBridgeExe
+        $pinfo.Arguments = "daemon 5514"
+        $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        [System.Diagnostics.Process]::Start($pinfo) | Out-Null
+        Start-Sleep -Milliseconds 600
+        if (Test-PortListening -Port 5514 -TimeoutMs 500) {
+            Write-Host " [OK] Fujifilm Background Daemon da san sang tren cong 5514!" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host " [CANH BAO] Khong the tu dong bat Daemon: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+Ensure-FujiDaemonRunning
+
+# Cache driver may anh dang hoat dong de tranh tre (latency) khi chup
+$global:ActiveCameraDriver = $null
+
 # Ham kiem tra trang thai may anh Fujifilm (Daemon HTTP 5514 hoac fuji_bridge.exe CLI)
 function Find-FujifilmCamera {
-    try {
-        $check = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/status" -TimeoutSec 1 -ErrorAction Stop
-        if ($check -and ($check.connected -or $check.cameraConnected)) {
-            return @{
-                connected = $true
-                cameraName = if ($check.cameraName) { $check.cameraName } else { "FUJIFILM X-T4" }
-                method = "daemon"
-                resolution = "6240x4160 (26.1 MP)"
+    if (Test-PortListening -Port 5514 -TimeoutMs 150) {
+        try {
+            $check = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/status" -TimeoutSec 1 -ErrorAction Stop
+            if ($check -and ($check.connected -or $check.cameraConnected)) {
+                return @{
+                    connected = $true
+                    cameraName = if ($check.cameraName) { $check.cameraName } else { "FUJIFILM X-T4" }
+                    method = "daemon"
+                    resolution = "6240x4160 (26.1 MP)"
+                }
             }
-        }
-    } catch {}
+        } catch {}
+    }
 
     if ($global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
         try {
@@ -184,8 +231,25 @@ function Find-FujifilmCamera {
 function Get-ActiveCameraInfo {
     param ([string]$ManualDccUrl)
 
+    # Neu da xac dinh Fujifilm truoc do, uu tien kiem tra nhanh Fujifilm truoc (duoi 50ms)
+    if ($global:ActiveCameraDriver -eq "fujifilm") {
+        $fuji = Find-FujifilmCamera
+        if ($fuji.connected) {
+            return @{
+                driver = "fujifilm"
+                connected = $true
+                cameraName = $fuji.cameraName
+                source = "FUJIFILM Camera Control SDK (64-bit)"
+                resolution = "6240x4160 (26.1 MP)"
+                dcc = @{ connected = $false }
+            }
+        }
+    }
+
+    # Kiem tra DCC
     $dcc = Find-DigiCamControlUrl -ManualUrl $ManualDccUrl
     if ($dcc.connected) {
+        $global:ActiveCameraDriver = "digicamcontrol"
         return @{
             driver = "digicamcontrol"
             connected = $true
@@ -196,8 +260,10 @@ function Get-ActiveCameraInfo {
         }
     }
 
+    # Kiem tra Fujifilm
     $fuji = Find-FujifilmCamera
     if ($fuji.connected) {
+        $global:ActiveCameraDriver = "fujifilm"
         return @{
             driver = "fujifilm"
             connected = $true
@@ -208,6 +274,7 @@ function Get-ActiveCameraInfo {
         }
     }
 
+    $global:ActiveCameraDriver = $null
     return @{
         driver = if ($dcc.online) { "digicamcontrol" } else { "none" }
         connected = $false
@@ -221,6 +288,16 @@ function Get-ActiveCameraInfo {
 # Ham tu dong do tim IP hoac tien trinh cua digiCamControl
 function Find-DigiCamControlUrl {
     param ([string]$ManualUrl)
+
+    # Kiem tra nhanh xem co port 5513 tren 127.0.0.1 khong
+    $port5513Open = Test-PortListening -Port 5513 -TimeoutMs 150
+    if (-not $port5513Open) {
+        # Neu port 5513 khong mo tren 127.0.0.1, kiem tra nhanh xem CameraControl.exe co dang chay khong
+        $proc = Get-Process -Name "CameraControl" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $proc) {
+            return @{ url = $null; cameraName = $null; connected = $false; online = $false; method = "none" }
+        }
+    }
 
     $urlsToTest = [System.Collections.Generic.List[string]]::new()
     $urlsToTest.Add("http://127.0.0.1:5513")
@@ -245,7 +322,7 @@ function Find-DigiCamControlUrl {
     # 1. Thu HTTP Webserver (port 5513)
     foreach ($testUrl in $uniqueUrls) {
         try {
-            $check = Invoke-RestMethod -Uri "$testUrl/?CMD=Get_Current_Value&Param=cameraname" -TimeoutSec 2 -ErrorAction Stop
+            $check = Invoke-RestMethod -Uri "$testUrl/?CMD=Get_Current_Value&Param=cameraname" -TimeoutSec 1 -ErrorAction Stop
             if ($check -ne $null) {
                 $camStr = $check.ToString().Trim()
                 $isConnected = ($camStr.Length -gt 0) -and ($camStr -ne "No camera connected") -and (-not $camStr.Contains("Error"))
@@ -625,21 +702,25 @@ while ($true) {
                             $fujiCaptured = $null
                             $fujiErrMsg = ""
 
-                            # 1. Thu qua Daemon HTTP 5514
-                            try {
-                                Write-Host "[FUJI BRIDGE STEP 2/4] Goi Daemon HTTP (http://127.0.0.1:5514/api/capture)..." -ForegroundColor Cyan
-                                $postBody = @{ orderCode = $orderCode; photoSaveDir = $PhotoDir; autoFocus = $true } | ConvertTo-Json
-                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 18 -ErrorAction Stop
-                                if ($fujiRes -and $fujiRes.success) {
-                                    $fujiCaptured = $fujiRes
-                                    Write-Host "[FUJI BRIDGE STEP 3/4] Daemon chup thanh cong! File: $($fujiRes.filename) ($($fujiRes.fileSizeMb))" -ForegroundColor Green
-                                } else {
-                                    $fujiErrMsg = if ($fujiRes.error) { $fujiRes.error } else { "Daemon bao khong thanh cong" }
-                                    Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon phan hoi: $fujiErrMsg" -ForegroundColor Yellow
+                            # 1. Thu qua Daemon HTTP 5514 (neu port 5514 dang mo)
+                            if (Test-PortListening -Port 5514 -TimeoutMs 150) {
+                                try {
+                                    Write-Host "[FUJI BRIDGE STEP 2/4] Goi Daemon HTTP (http://127.0.0.1:5514/api/capture)..." -ForegroundColor Cyan
+                                    $postBody = @{ orderCode = $orderCode; photoSaveDir = $PhotoDir; autoFocus = $true } | ConvertTo-Json
+                                    $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 15 -ErrorAction Stop
+                                    if ($fujiRes -and $fujiRes.success) {
+                                        $fujiCaptured = $fujiRes
+                                        Write-Host "[FUJI BRIDGE STEP 3/4] Daemon chup thanh cong! File: $($fujiRes.filename) ($($fujiRes.fileSizeMb))" -ForegroundColor Green
+                                    } else {
+                                        $fujiErrMsg = if ($fujiRes.error) { $fujiRes.error } else { "Daemon bao khong thanh cong" }
+                                        Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon phan hoi: $fujiErrMsg" -ForegroundColor Yellow
+                                    }
+                                } catch {
+                                    $fujiErrMsg = $_.Exception.Message
+                                    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg). Chuyen sang goi truc tiep CLI..." -ForegroundColor Yellow
                                 }
-                            } catch {
-                                $fujiErrMsg = $_.Exception.Message
-                                Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg). Chuyen sang goi truc tiep CLI..." -ForegroundColor Yellow
+                            } else {
+                                Write-Host "[FUJI BRIDGE STEP 2] Daemon 5514 chua khoi chay, goi truc tiep CLI..." -ForegroundColor Yellow
                             }
 
                             # 2. Neu Daemon chua chay hoac loi, goi truc tiep qua CLI fuji_bridge.exe
