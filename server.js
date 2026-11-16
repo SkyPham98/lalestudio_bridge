@@ -327,13 +327,24 @@ function getFujiBridgeExe() {
   }
 
   const defaultExe = path.join(__dirname, 'bin', 'fujifilm_win64', 'fuji_bridge.exe');
-  if (fs.existsSync(defaultExe)) {
+  const csSource = path.join(__dirname, 'bin', 'fujifilm_win64', 'FujiBridge.cs');
+
+  let needsRecompile = !fs.existsSync(defaultExe);
+  if (!needsRecompile && fs.existsSync(csSource)) {
+    try {
+      if (fs.statSync(csSource).mtime > fs.statSync(defaultExe).mtime) {
+        needsRecompile = true;
+        console.log(`[Bridge] ⚙️ Phát hiện FujiBridge.cs mới hơn fuji_bridge.exe cũ, tiến hành biên dịch lại...`);
+      }
+    } catch (e) {}
+  }
+
+  if (!needsRecompile && fs.existsSync(defaultExe)) {
     cachedFujiExePath = defaultExe;
     return defaultExe;
   }
 
   // Tự động biên dịch FujiBridge.cs thành fuji_bridge.exe trên Windows nếu có csc.exe
-  const csSource = path.join(__dirname, 'bin', 'fujifilm_win64', 'FujiBridge.cs');
   if (fs.existsSync(csSource)) {
     const cscCandidates = [
       'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe',
@@ -548,23 +559,29 @@ async function triggerFujiFocus() {
  */
 async function triggerFujiCapture(orderCode, targetFolder, autoFocus = true) {
   const daemonUrl = fujiConfig.url || 'http://127.0.0.1:5514';
+  console.log(`[Bridge Fuji STEP 1/4] Kích hoạt chụp ảnh Fujifilm X-T4 (26.1 MP) - Đơn=${orderCode}, Thư mục=${targetFolder}`);
 
   // 1. Thử qua HTTP Daemon
   try {
+    console.log(`[Bridge Fuji STEP 2/4] Gửi lệnh chụp tới Daemon HTTP: ${daemonUrl}/api/capture...`);
     const res = await fetch(`${daemonUrl}/api/capture`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ orderCode, photoSaveDir: targetFolder, autoFocus }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(18000)
     });
     if (res.ok) {
       const data = await res.json();
       if (data.success) {
+        console.log(`[Bridge Fuji STEP 3/4] ✓ Daemon chụp thành công! File: ${data.filename} (${data.fileSizeMb || ''})`);
         return data;
       }
+      console.warn(`[Bridge Fuji STEP 2 Cảnh báo] Daemon trả về:`, data);
+    } else {
+      console.warn(`[Bridge Fuji STEP 2 Cảnh báo] Daemon phản hồi HTTP ${res.status}`);
     }
   } catch (daemonErr) {
-    console.warn(`[Bridge] Fuji daemon notice (${daemonErr.message}), gọi CLI fuji_bridge.exe...`);
+    console.warn(`[Bridge Fuji STEP 2 Thông báo] Không thể chụp qua Daemon (${daemonErr.message}). Chuyển sang gọi CLI fuji_bridge.exe...`);
   }
 
   // 2. Thử qua CLI fuji_bridge.exe
@@ -576,20 +593,31 @@ async function triggerFujiCapture(orderCode, targetFolder, autoFocus = true) {
   const cliArgs = ['capture', targetFolder, orderCode];
   if (!autoFocus) cliArgs.push('--no-af');
 
+  console.log(`[Bridge Fuji STEP 2b] Khởi chạy trực tiếp CLI: ${fujiExe} ${cliArgs.join(' ')}`);
+
   return new Promise((resolve, reject) => {
-    execFile(fujiExe, cliArgs, { timeout: 15000, maxBuffer: 50 * 1024 * 1024, cwd: path.dirname(fujiExe) }, (err, stdout, stderr) => {
+    execFile(fujiExe, cliArgs, { timeout: 20000, maxBuffer: 50 * 1024 * 1024, cwd: path.dirname(fujiExe) }, (err, stdout, stderr) => {
+      if (stderr) {
+        console.log(`------------------------------------------------------------`);
+        console.log(`[FUJI SDK LOG CHI TIẾT TỪNG BƯỚC]:\n${stderr.trim()}`);
+        console.log(`------------------------------------------------------------`);
+      }
       if (err) {
         return reject(new Error(`Lỗi chạy fuji_bridge.exe: ${err.message}`));
       }
       try {
         const parsed = JSON.parse(stdout.trim());
         if (parsed.success) {
+          console.log(`[Bridge Fuji STEP 4/4] ✓ CHỤP ẢNH FUJIFILM THÀNH CÔNG: ${parsed.filePath}`);
           resolve(parsed);
         } else {
-          reject(new Error(parsed.message || parsed.error || 'Chụp ảnh Fujifilm thất bại'));
+          const errMsg = parsed.message || parsed.error || 'Chụp ảnh Fujifilm thất bại';
+          console.error(`[Bridge Fuji THẤT BẠI] ${errMsg}`);
+          reject(new Error(errMsg));
         }
       } catch (pe) {
-        reject(new Error(`Không thể giải mã kết quả từ fuji_bridge: ${stdout.substring(0, 200)}`));
+        console.error(`[Bridge Fuji LỖI] Không thể giải mã kết quả từ fuji_bridge: ${stdout.substring(0, 300)}`);
+        reject(new Error(`Không thể giải mã kết quả từ fuji_bridge: ${stdout.substring(0, 300)}`));
       }
     });
   });

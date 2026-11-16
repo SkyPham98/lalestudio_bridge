@@ -106,19 +106,30 @@ if ($global:RemoteCmdExe) {
 
 # Khoi tao va tu dong bien dich FujiBridge cho Fujifilm neu can
 $global:FujiBridgeExe = Join-Path $PSScriptRoot "bin\fujifilm_win64\fuji_bridge.exe"
-if (-not (Test-Path $global:FujiBridgeExe)) {
-    $csSource = Join-Path $PSScriptRoot "bin\fujifilm_win64\FujiBridge.cs"
-    if (Test-Path $csSource) {
-        $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-        if (-not (Test-Path $csc)) { $csc = "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
-        if (Test-Path $csc) {
-            try {
-                Write-Host " [INFO] Dang tu dong bien dich fuji_bridge.exe (64-bit)..." -ForegroundColor Cyan
-                $proc = Start-Process -FilePath $csc -ArgumentList "/target:exe /platform:x64 /optimize+ /out:`"$global:FujiBridgeExe`" `"$csSource`"" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
-                if ($proc.ExitCode -eq 0) {
-                    Write-Host " [OK] Da tao thanh cong: fuji_bridge.exe (FUJIFILM SDK)" -ForegroundColor Green
-                }
-            } catch {}
+$csSource = Join-Path $PSScriptRoot "bin\fujifilm_win64\FujiBridge.cs"
+
+$needsCompile = (-not (Test-Path $global:FujiBridgeExe))
+if (-not $needsCompile -and (Test-Path $csSource)) {
+    if ((Get-Item $csSource).LastWriteTime -gt (Get-Item $global:FujiBridgeExe).LastWriteTime) {
+        $needsCompile = $true
+        Write-Host " [INFO] Phat hien FujiBridge.cs da duoc cap nhat moi, tien hanh bien dich lai..." -ForegroundColor Yellow
+    }
+}
+
+if ($needsCompile -and (Test-Path $csSource)) {
+    $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if (-not (Test-Path $csc)) { $csc = "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+    if (Test-Path $csc) {
+        try {
+            Write-Host " [INFO] Dang tu dong bien dich fuji_bridge.exe (64-bit)..." -ForegroundColor Cyan
+            $proc = Start-Process -FilePath $csc -ArgumentList "/target:exe /platform:x64 /optimize+ /out:`"$global:FujiBridgeExe`" `"$csSource`"" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
+            if ($proc.ExitCode -eq 0 -and (Test-Path $global:FujiBridgeExe)) {
+                Write-Host " [OK] Da tao thanh cong: fuji_bridge.exe (FUJIFILM SDK)" -ForegroundColor Green
+            } else {
+                Write-Host " [CANH BAO] Bien dich fuji_bridge.exe that bai (ExitCode=$($proc.ExitCode))" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host " [CANH BAO] Khong the chay csc.exe: $($_.Message)" -ForegroundColor Yellow
         }
     }
 }
@@ -515,22 +526,45 @@ while ($true) {
 
                         # FUJIFILM FOCUS
                         if ($camInfo.driver -eq "fujifilm") {
-                            Write-Host "[FUJI] Dang kich hoat autofocus FUJIFILM..." -ForegroundColor Cyan
+                            Write-Host "[FUJI FOCUS] Dang kich hoat autofocus FUJIFILM..." -ForegroundColor Cyan
+                            $focusMsg = ""
                             try {
-                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/focus" -TimeoutSec 2 -ErrorAction Stop
-                                if ($fujiRes -and $fujiRes.success) { $focused = $true }
-                            } catch {}
+                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/focus" -TimeoutSec 3 -ErrorAction Stop
+                                if ($fujiRes -and $fujiRes.success) {
+                                    $focused = $true
+                                    $focusMsg = $fujiRes.message
+                                }
+                            } catch {
+                                Write-Host "[FUJI FOCUS] Daemon focus that bai: $($_.Exception.Message)" -ForegroundColor Yellow
+                            }
 
                             if (-not $focused -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
                                 try {
-                                    $p = Start-Process -FilePath $global:FujiBridgeExe -ArgumentList "focus" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
-                                    if ($p.ExitCode -eq 0) { $focused = $true }
-                                } catch {}
+                                    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+                                    $pinfo.FileName = $global:FujiBridgeExe
+                                    $pinfo.Arguments = "focus"
+                                    $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
+                                    $pinfo.RedirectStandardOutput = $true
+                                    $pinfo.RedirectStandardError = $true
+                                    $pinfo.UseShellExecute = $false
+                                    $pinfo.CreateNoWindow = $true
+                                    $p = [System.Diagnostics.Process]::Start($pinfo)
+                                    $p.WaitForExit(5000) | Out-Null
+                                    $errOut = $p.StandardError.ReadToEnd()
+                                    $out = $p.StandardOutput.ReadToEnd()
+                                    if ($errOut) { Write-Host "[FUJI FOCUS LOG] $errOut" -ForegroundColor DarkGray }
+                                    if ($p.ExitCode -eq 0) {
+                                        $focused = $true
+                                        $focusMsg = "Da kich hoat autofocus FUJIFILM thanh cong"
+                                    }
+                                } catch {
+                                    Write-Host "[FUJI FOCUS LOI] $($_.Message)" -ForegroundColor Red
+                                }
                             }
 
                             $focusResult = @{
                                 success = $focused
-                                message = if ($focused) { "Da kich hoat autofocus FUJIFILM" } else { "Lay net Fujifilm that bai" }
+                                message = if ($focused) { if ($focusMsg) { $focusMsg } else { "Da kich hoat autofocus FUJIFILM" } } else { "Lay net Fujifilm that bai" }
                             }
                             Send-JsonResponse -response $response -statusCode 200 -jsonObj $focusResult
                             continue
@@ -585,45 +619,102 @@ while ($true) {
 
                         # A. XU LY CHUP ANH BANG FUJIFILM (26.1 MP)
                         if ($camInfo.driver -eq "fujifilm") {
-                            Write-Host "[FUJI] Kich hoat man trap FUJIFILM va Flash studio (26.1 MP)..." -ForegroundColor Cyan
+                            Write-Host "========================================================================" -ForegroundColor Magenta
+                            Write-Host "[FUJI BRIDGE STEP 1/4] Kich hoat chup anh FUJIFILM X-T4 (26.1 MP)..." -ForegroundColor Cyan
+                            Write-Host "  -> Ma don: $orderCode | Thu muc luu: $PhotoDir" -ForegroundColor DarkGray
                             $fujiCaptured = $null
+                            $fujiErrMsg = ""
 
-                            # Uu tien qua Daemon HTTP 5514
+                            # 1. Thu qua Daemon HTTP 5514
                             try {
+                                Write-Host "[FUJI BRIDGE STEP 2/4] Goi Daemon HTTP (http://127.0.0.1:5514/api/capture)..." -ForegroundColor Cyan
                                 $postBody = @{ orderCode = $orderCode; photoSaveDir = $PhotoDir; autoFocus = $true } | ConvertTo-Json
-                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 15 -ErrorAction Stop
+                                $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 18 -ErrorAction Stop
                                 if ($fujiRes -and $fujiRes.success) {
                                     $fujiCaptured = $fujiRes
+                                    Write-Host "[FUJI BRIDGE STEP 3/4] Daemon chup thanh cong! File: $($fujiRes.filename) ($($fujiRes.fileSizeMb))" -ForegroundColor Green
+                                } else {
+                                    $fujiErrMsg = if ($fujiRes.error) { $fujiRes.error } else { "Daemon bao khong thanh cong" }
+                                    Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon phan hoi: $fujiErrMsg" -ForegroundColor Yellow
                                 }
-                            } catch {}
+                            } catch {
+                                $fujiErrMsg = $_.Exception.Message
+                                Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg). Chuyen sang goi truc tiep CLI..." -ForegroundColor Yellow
+                            }
 
-                            # Thu qua CLI fuji_bridge.exe neu daemon chua chay
+                            # 2. Neu Daemon chua chay hoac loi, goi truc tiep qua CLI fuji_bridge.exe
                             if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+                                Write-Host "[FUJI BRIDGE STEP 2b] Khoi chay truc tiep CLI: $global:FujiBridgeExe capture..." -ForegroundColor Cyan
                                 try {
                                     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
                                     $pinfo.FileName = $global:FujiBridgeExe
                                     $pinfo.Arguments = "capture `"$PhotoDir`" `"$orderCode`""
                                     $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
                                     $pinfo.RedirectStandardOutput = $true
+                                    $pinfo.RedirectStandardError = $true
                                     $pinfo.UseShellExecute = $false
                                     $pinfo.CreateNoWindow = $true
                                     $p = [System.Diagnostics.Process]::Start($pinfo)
-                                    $p.WaitForExit(15000) | Out-Null
-                                    $out = $p.StandardOutput.ReadToEnd().Trim()
-                                    if ($out) {
-                                        $fujiCaptured = $out | ConvertFrom-Json
+
+                                    $stdErrTask = $p.StandardError.ReadToEndAsync()
+                                    $stdOutTask = $p.StandardOutput.ReadToEndAsync()
+
+                                    $p.WaitForExit(20000) | Out-Null
+
+                                    $errOut = $stdErrTask.Result
+                                    $out = $stdOutTask.Result
+
+                                    if ($errOut) {
+                                        Write-Host "------------------------------------------------------------" -ForegroundColor DarkCyan
+                                        Write-Host "[FUJI SDK LOG CHI TIET TUNG BUOC]:" -ForegroundColor DarkCyan
+                                        $errOut.Split("`n") | ForEach-Object {
+                                            $tLine = $_.Trim()
+                                            if ($tLine) {
+                                                if ($tLine -like "*LOI*" -or $tLine -like "*ERROR*" -or $tLine -like "*FAIL*" -or $tLine -like "*TIMEOUT*") {
+                                                    Write-Host "  $tLine" -ForegroundColor Red
+                                                } elseif ($tLine -like "*CANH BAO*" -or $tLine -like "*WARN*") {
+                                                    Write-Host "  $tLine" -ForegroundColor Yellow
+                                                } elseif ($tLine -like "*THANH CONG*" -or $tLine -like "*PHAT HIEN*" -or $tLine -like "*SUCCESS*") {
+                                                    Write-Host "  $tLine" -ForegroundColor Green
+                                                } else {
+                                                    Write-Host "  $tLine" -ForegroundColor Gray
+                                                }
+                                            }
+                                        }
+                                        Write-Host "------------------------------------------------------------" -ForegroundColor DarkCyan
                                     }
-                                } catch {}
+
+                                    if ($p.ExitCode -ne 0) {
+                                        Write-Host "[FUJI BRIDGE] CLI ket thuc voi ExitCode = $($p.ExitCode)" -ForegroundColor Red
+                                    }
+
+                                    if ($out) {
+                                        try {
+                                            $fujiCaptured = $out.Trim() | ConvertFrom-Json
+                                        } catch {
+                                            Write-Host "[FUJI BRIDGE] Khong the giai ma JSON tu CLI: $out" -ForegroundColor Red
+                                        }
+                                    }
+                                } catch {
+                                    $fujiErrMsg = $_.Exception.Message
+                                    Write-Host "[FUJI BRIDGE] Ngoai le khi goi CLI: $fujiErrMsg" -ForegroundColor Red
+                                }
                             }
 
                             if ($fujiCaptured -and $fujiCaptured.success) {
-                                Write-Host "[OK] Chup anh FUJIFILM thanh cong! Do phan giai: $($fujiCaptured.resolution)" -ForegroundColor Green
+                                Write-Host "[FUJI BRIDGE STEP 4/4] CHUP ANH FUJIFILM THANH CONG!" -ForegroundColor Green
+                                Write-Host "  -> File anh goc: $($fujiCaptured.filePath)" -ForegroundColor Green
+                                Write-Host "  -> Do phan giai: $($fujiCaptured.resolution) ($($fujiCaptured.fileSizeMb))" -ForegroundColor Green
+                                Write-Host "========================================================================" -ForegroundColor Magenta
                                 Send-JsonResponse -response $response -statusCode 200 -jsonObj $fujiCaptured
                                 continue
                             } else {
+                                $finalErr = if ($fujiCaptured.error) { $fujiCaptured.error } elseif ($fujiCaptured.message) { $fujiCaptured.message } elseif ($fujiErrMsg) { $fujiErrMsg } else { "Khong nhan duoc phan hoi tu camera Fujifilm." }
+                                Write-Host "[FUJI BRIDGE THAT BAI] $finalErr" -ForegroundColor Red
+                                Write-Host "========================================================================" -ForegroundColor Magenta
                                 $errResult = @{
                                     success = $false
-                                    message = "Loi chup anh FUJIFILM: Khong nhan duoc phan hoi tu camera."
+                                    message = "Loi chup anh FUJIFILM: $finalErr"
                                 }
                                 Send-JsonResponse -response $response -statusCode 500 -jsonObj $errResult
                                 continue

@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 
 namespace Lalestudio.FujifilmBridge
 {
@@ -57,20 +58,27 @@ namespace Lalestudio.FujifilmBridge
         public const int XSDK_DSC_IF_USB = 1;
         public const int XSDK_DSC_MODE_TETHER = 1;
 
-        public const int XSDK_PRIORITY_CAMERA = 0;
-        public const int XSDK_PRIORITY_PC = 1;
+        // Priority Mode (theo XAPI.H chinh thuc: CAMERA = 1, PC = 2)
+        public const int XSDK_PRIORITY_CAMERA = 1;
+        public const int XSDK_PRIORITY_PC = 2;
 
+        // Release Modes
+        public const int XSDK_RELEASE_SHOOT = 0x0100;
         public const int XSDK_RELEASE_S1ON = 0x0200;
         public const int XSDK_RELEASE_N_S1OFF = 0x0004;
         public const int XSDK_RELEASE_S2 = 0x0300;
         public const int XSDK_RELEASE_S2_S1OFF = 0x0304;
+        public const int XSDK_RELEASE_SHOOT_S1OFF = 0x0104;
 
+        // Release Modes Ex
         public const int XSDK_RELEASE_EX_S1_ON = 0x00010000;
         public const int XSDK_RELEASE_EX_S1_OFF = 0x00000001;
         public const int XSDK_RELEASE_EX_S2_ON = 0x00020000;
         public const int XSDK_RELEASE_EX_S2_OFF = 0x00000002;
         public const int XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF = 0x00020003;
+        public const int XSDK_RELEASE_EX_S1_ON_S2_ON_S2_OFF_S1_OFF = 0x00030003;
 
+        // Image Formats
         public const int XSDK_IMAGEFORMAT_NONE = 5;
         public const int XSDK_IMAGEFORMAT_RAW = 1;
         public const int XSDK_IMAGEFORMAT_JPEG = 7;
@@ -92,6 +100,7 @@ namespace Lalestudio.FujifilmBridge
         private delegate int XSDK_Close_Fn(IntPtr hCamera);
         private delegate int XSDK_GetDeviceInfo_Fn(IntPtr hCamera, ref XSDK_DeviceInformation pDevInfo);
         private delegate int XSDK_GetErrorNumber_Fn(IntPtr hCamera, ref int plAPICode, ref int plERRCode);
+        private delegate int XSDK_GetErrorDetails_Fn(IntPtr hCamera, ref int plERRCode);
         private delegate int XSDK_SetPriorityMode_Fn(IntPtr hCamera, int lPriorityMode);
         private delegate int XSDK_GetPriorityMode_Fn(IntPtr hCamera, ref int plPriorityMode);
         private delegate int XSDK_Release_Fn(IntPtr hCamera, int lReleaseMode, ref int plShotOpt, ref int plAfStatus);
@@ -108,6 +117,7 @@ namespace Lalestudio.FujifilmBridge
         private XSDK_Close_Fn _closeFn;
         private XSDK_GetDeviceInfo_Fn _getDeviceInfoFn;
         private XSDK_GetErrorNumber_Fn _getErrorNumberFn;
+        private XSDK_GetErrorDetails_Fn _getErrorDetailsFn;
         private XSDK_SetPriorityMode_Fn _setPriorityModeFn;
         private XSDK_GetPriorityMode_Fn _getPriorityModeFn;
         private XSDK_Release_Fn _releaseFn;
@@ -123,6 +133,61 @@ namespace Lalestudio.FujifilmBridge
         public bool IsConnected { get { return _hCamera != IntPtr.Zero; } }
         public string LastError { get; private set; }
 
+        public static void Log(string msg)
+        {
+            string line = string.Format("[{0:HH:mm:ss.fff}] {1}", DateTime.Now, msg);
+            Console.Error.WriteLine(line);
+        }
+
+        public static string DecodeErrorCode(int errCode)
+        {
+            switch (errCode)
+            {
+                case 0x0000: return "NOERR (Khong co loi)";
+                case 0x1001: return "SEQUENCE (Sai thu tu ham goi SDK - Camera chua san sang nhan lenh nay)";
+                case 0x1002: return "PARAM (Tham so dau vao khong hop le)";
+                case 0x1003: return "INVALID_CAMERA (Handle may anh khong hop le hoac da bi dong)";
+                case 0x1004: return "LOADLIB (Loi nap thu vien con cua dong may anh)";
+                case 0x1005: return "UNSUPPORTED (Lenh khong duoc ho tro boi dong may nay)";
+                case 0x1006: return "BUSY (May anh dang ban ghi the nho hoac xu ly tac vu khac)";
+                case 0x1007: return "AF_TIMEOUT (Lay net that bai / Khong bat duoc net - Hay bat den studio hoac chuyen sang Manual Focus)";
+                case 0x1008: return "SHOOT_ERROR (Loi co hoc khi bam chup / Khong the nha man trap)";
+                case 0x1009: return "FRAME_FULL (Bo dem chup cua may anh da day)";
+                case 0x1010: return "STANDBY (May anh dang o che do ngu tiet kiem pin Standby/Sleep)";
+                case 0x1011: return "NODRIVER (Chua cai driver hoac may tinh khong nhan driver Fujifilm)";
+                case 0x1012: return "NO_MODEL_MODULE (Thieu module dll cua model may trong thu muc)";
+                case 0x1013: return "RECOGNIZE_FAIL (Khong nhan dien duoc may anh)";
+                case 0x1014: return "CONNECT_FAIL (Ket noi that bai)";
+                case 0x1015: return "INVALID_USBMODE (CHE DO USB SAI! Vao Menu may anh -> CONNECTION SETTING -> CONNECTION MODE -> Chon 'USB TETHER SHOOTING AUTO' hoac 'FIXED')";
+                case 0x1016: return "FORCEMODE_BUSY (May anh dang ban)";
+                case 0x1017: return "RUNNING_OTHER_FUNCTION (May anh dang ban chuc nang khac)";
+                case 0x2001: return "COMMUNICATION (Loi giao tiep cap USB - Cap long hoac nhieu tin hieu)";
+                case 0x2002: return "TIMEOUT (Qua thoi gian cho phan hoi tu may anh)";
+                case 0x2003: return "COMBINATION (Thiet lap thong so may anh khong tuong thich)";
+                case 0x2004: return "WRITEERROR (Loi ghi du lieu)";
+                case 0x2005: return "CARDFULL (The nho trong may anh Fujifilm da day!)";
+                case 0x3001: return "HARDWARE (Loi phan cung may anh hoac ong kinh)";
+                case 0x9001: return "INTERNAL (Loi noi bo SDK)";
+                case 0x9002: return "MEMFULL (Het bo nho RAM may tinh)";
+                default: return string.Format("Ma loi SDK: 0x{0:X4}", errCode);
+            }
+        }
+
+        public static string DecodeErrorDetails(int details)
+        {
+            var list = new List<string>();
+            if ((details & 0x0001) != 0) list.Add("S1_PRESSED");
+            if ((details & 0x0002) != 0) list.Add("AEL_ACTIVE");
+            if ((details & 0x0004) != 0) list.Add("AFL_ACTIVE");
+            if ((details & 0x0010) != 0) list.Add("AFON_ACTIVE");
+            if ((details & 0x0020) != 0) list.Add("SHOOTING_IN_PROGRESS");
+            if ((details & 0x0080) != 0) list.Add("RECORDING");
+            if ((details & 0x0100) != 0) list.Add("LIVEVIEW_ACTIVE");
+            if ((details & 0x0200) != 0) list.Add("UNTRANSFERRED_IMAGE_PENDING");
+            if (list.Count == 0) return "NORMAL";
+            return string.Join(" | ", list.ToArray());
+        }
+
         public FujiSdkNative(string dllDirectory = null)
         {
             string baseDir = string.IsNullOrEmpty(dllDirectory)
@@ -132,15 +197,16 @@ namespace Lalestudio.FujifilmBridge
             string dllPath = Path.Combine(baseDir, "XAPI.dll");
             if (!File.Exists(dllPath))
             {
-                // Fallback to current directory
                 dllPath = "XAPI.dll";
             }
 
+            Log("[SDK LOAD] Dang nap thu vien: " + dllPath);
             _hModule = LoadLibrary(dllPath);
             if (_hModule == IntPtr.Zero)
             {
                 int err = Marshal.GetLastWin32Error();
-                LastError = string.Format("Cannot load XAPI.dll from {0} (Win32 Error: {1})", dllPath, err);
+                LastError = string.Format("Khong the nap XAPI.dll tu {0} (Win32 Error: {1})", dllPath, err);
+                Log("[SDK LOAD LOI] " + LastError);
                 return;
             }
 
@@ -151,6 +217,7 @@ namespace Lalestudio.FujifilmBridge
             _closeFn = GetDelegate<XSDK_Close_Fn>("XSDK_Close");
             _getDeviceInfoFn = GetDelegate<XSDK_GetDeviceInfo_Fn>("XSDK_GetDeviceInfo");
             _getErrorNumberFn = GetDelegate<XSDK_GetErrorNumber_Fn>("XSDK_GetErrorNumber");
+            _getErrorDetailsFn = GetDelegate<XSDK_GetErrorDetails_Fn>("XSDK_GetErrorDetails");
             _setPriorityModeFn = GetDelegate<XSDK_SetPriorityMode_Fn>("XSDK_SetPriorityMode");
             _getPriorityModeFn = GetDelegate<XSDK_GetPriorityMode_Fn>("XSDK_GetPriorityMode");
             _releaseFn = GetDelegate<XSDK_Release_Fn>("XSDK_Release");
@@ -158,6 +225,8 @@ namespace Lalestudio.FujifilmBridge
             _readImageInfoFn = GetDelegate<XSDK_ReadImageInfo_Fn>("XSDK_ReadImageInfo");
             _readImageFn = GetDelegate<XSDK_ReadImage_Fn>("XSDK_ReadImage");
             _deleteImageFn = GetDelegate<XSDK_DeleteImage_Fn>("XSDK_DeleteImage");
+
+            Log("[SDK LOAD THANH CONG] Da lien ket day du cac ham API tu XAPI.dll (64-bit)");
         }
 
         private T GetDelegate<T>(string procName) where T : class
@@ -174,13 +243,16 @@ namespace Lalestudio.FujifilmBridge
 
             if (_initFn != null)
             {
+                Log("[SDK INIT] Dang khoi tao he thong SDK (XSDK_Init)...");
                 int ret = _initFn(IntPtr.Zero);
                 if (ret == XSDK_COMPLETE)
                 {
                     _isSdkInitialized = true;
+                    Log("[SDK INIT THANH CONG] XSDK_Init hoan tat (Ret=0)");
                     return true;
                 }
-                LastError = string.Format("XSDK_Init failed with code {0}", ret);
+                LastError = string.Format("XSDK_Init that bai voi ma loi {0}", ret);
+                Log("[SDK INIT LOI] " + LastError);
                 return false;
             }
             return false;
@@ -190,27 +262,42 @@ namespace Lalestudio.FujifilmBridge
         {
             devInfo = new XSDK_DeviceInformation();
 
-            if (!InitializeSdk()) return false;
+            Log("[CONNECT] Bat dau ket noi may anh Fujifilm...");
+            if (!InitializeSdk())
+            {
+                Log("[CONNECT LOI] InitializeSdk that bai: " + LastError);
+                return false;
+            }
 
             if (_detectFn == null || _openExFn == null)
             {
-                LastError = "Required SDK functions not found";
+                LastError = "Khong tim thay ham XSDK_Detect hoac XSDK_OpenEx trong XAPI.dll";
+                Log("[CONNECT LOI] " + LastError);
                 return false;
             }
 
             int count = 0;
             int detRet = _detectFn(XSDK_DSC_IF_USB, null, null, ref count);
+            Log(string.Format("[CONNECT] Do tim may anh qua cong USB (XSDK_Detect): Ret={0}, So may tim thay={1}", detRet, count));
+
             if (detRet != XSDK_COMPLETE || count <= 0)
             {
-                LastError = string.Format("No Fujifilm camera detected on USB (Count: {0}, Ret: {1})", count, detRet);
+                LastError = string.Format("Khong tim thay may anh Fujifilm nao qua USB (Count={0}, Ret={1}). Vui long kiem tra: Menu may anh -> CONNECTION SETTING -> CONNECTION MODE -> chon 'USB TETHER SHOOTING AUTO'.", count, detRet);
+                Log("[CONNECT CANH BAO] " + LastError);
                 return false;
             }
 
             int mode = 0;
             int openRet = _openExFn("ENUM:0", ref _hCamera, ref mode, IntPtr.Zero);
+            Log(string.Format("[CONNECT] Mo phien giao tiep camera (XSDK_OpenEx 'ENUM:0'): Ret={0}, Handle=0x{1:X}, Mode={2}",
+                openRet, _hCamera.ToInt64(), mode));
+
             if (openRet != XSDK_COMPLETE || _hCamera == IntPtr.Zero)
             {
-                LastError = string.Format("XSDK_OpenEx failed with code {0}", openRet);
+                int apiCode = 0, errCode = 0;
+                if (_getErrorNumberFn != null) _getErrorNumberFn(IntPtr.Zero, ref apiCode, ref errCode);
+                LastError = string.Format("XSDK_OpenEx that bai (Ret={0}, ErrCode=0x{1:X} - {2})", openRet, errCode, DecodeErrorCode(errCode));
+                Log("[CONNECT LOI] " + LastError);
                 _hCamera = IntPtr.Zero;
                 return false;
             }
@@ -218,12 +305,18 @@ namespace Lalestudio.FujifilmBridge
             if (_getDeviceInfoFn != null)
             {
                 int infoRet = _getDeviceInfoFn(_hCamera, ref devInfo);
-                if (infoRet != XSDK_COMPLETE)
-                {
-                    LastError = string.Format("XSDK_GetDeviceInfo failed with code {0}", infoRet);
-                }
+                Log(string.Format("[CONNECT] Thong tin may anh: Model='{0}', Serial='{1}', Firmware='{2}', Ret={3}",
+                    devInfo.strProduct, devInfo.strSerialNo, devInfo.strFirmware, infoRet));
             }
 
+            // Thiet lap quyen dieu khien PC (XSDK_PRIORITY_PC = 2) de camera cho phep PC nha man trap
+            if (_setPriorityModeFn != null)
+            {
+                int prioRet = _setPriorityModeFn(_hCamera, XSDK_PRIORITY_PC);
+                Log(string.Format("[CONNECT] Thiet lap quyen dieu khien PC (XSDK_SetPriorityMode -> XSDK_PRIORITY_PC): Ret={0} (0 = Thanh cong)", prioRet));
+            }
+
+            Log("[CONNECT THANH CONG] May anh Fujifilm da ket noi va san sang hoat dong!");
             return true;
         }
 
@@ -231,6 +324,7 @@ namespace Lalestudio.FujifilmBridge
         {
             if (_hCamera != IntPtr.Zero && _closeFn != null)
             {
+                Log(string.Format("[DISCONNECT] Dong phien may anh Fujifilm Handle=0x{0:X}...", _hCamera.ToInt64()));
                 try { _closeFn(_hCamera); } catch { }
                 _hCamera = IntPtr.Zero;
                 Thread.Sleep(300);
@@ -239,10 +333,21 @@ namespace Lalestudio.FujifilmBridge
 
         public bool TriggerFocus()
         {
+            Log("[FOCUS] Nhan yeu cau lay net tu dong (Autofocus)...");
             if (_hCamera == IntPtr.Zero)
             {
                 XSDK_DeviceInformation dummy;
-                if (!ConnectCamera(out dummy)) return false;
+                if (!ConnectCamera(out dummy))
+                {
+                    Log("[FOCUS LOI] Khong the ket noi may anh: " + LastError);
+                    return false;
+                }
+            }
+
+            // Dam bao quyen PC
+            if (_setPriorityModeFn != null)
+            {
+                _setPriorityModeFn(_hCamera, XSDK_PRIORITY_PC);
             }
 
             int shotOpt = 1;
@@ -251,73 +356,147 @@ namespace Lalestudio.FujifilmBridge
 
             if (_releaseFn != null)
             {
+                Log("[FOCUS] Gui lenh S1ON (an nua co lay net)...");
                 ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
+                Log(string.Format("[FOCUS] Ket qua S1ON: Ret={0}, ShotOpt={1}, Status={2} (1=AF OK, 0=AF Fail)", ret, shotOpt, status));
                 Thread.Sleep(280);
                 _releaseFn(_hCamera, XSDK_RELEASE_N_S1OFF, ref shotOpt, ref status);
+                Log("[FOCUS] Nha S1OFF hoan tat.");
             }
             else if (_releaseExFn != null)
             {
+                Log("[FOCUS] Gui lenh ReleaseEx S1_ON...");
                 ret = _releaseExFn(_hCamera, XSDK_RELEASE_EX_S1_ON, ref shotOpt, ref status);
+                Log(string.Format("[FOCUS] Ket qua S1_ON: Ret={0}, ShotOpt={1}, Status={2}", ret, shotOpt, status));
                 Thread.Sleep(280);
                 _releaseExFn(_hCamera, XSDK_RELEASE_EX_S1_OFF, ref shotOpt, ref status);
             }
 
-            return ret == XSDK_COMPLETE;
+            if (ret != XSDK_COMPLETE)
+            {
+                int apiCode = 0, errCode = 0;
+                if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref apiCode, ref errCode);
+                LastError = string.Format("Loi lay net: Ret={0}, ErrCode=0x{1:X} ({2})", ret, errCode, DecodeErrorCode(errCode));
+                Log("[FOCUS LOI] " + LastError);
+                return false;
+            }
+
+            Log("[FOCUS THANH CONG] Da hoan tat lay net tu dong.");
+            return true;
         }
 
-        public byte[] CapturePhoto(bool autoFocus, out string resolution, int timeoutSeconds = 12)
+        public byte[] CapturePhoto(bool autoFocus, out string resolution, int timeoutSeconds = 15)
         {
             resolution = "6240x4160 (26.1 MP)";
 
+            Log("========================================================================");
+            Log("[FUJI CAPTURE STEP 1/6] Kiem tra ket noi may anh...");
             if (_hCamera == IntPtr.Zero)
             {
+                Log("[FUJI CAPTURE STEP 1/6] Camera chua mo phien, dang tien hanh ket noi...");
                 XSDK_DeviceInformation dummy;
                 if (!ConnectCamera(out dummy))
                 {
-                    throw new Exception("Cannot connect to Fujifilm camera: " + LastError);
+                    string err = "Khong the ket noi may anh Fujifilm: " + LastError;
+                    Log("[FUJI CAPTURE LOI] " + err);
+                    throw new Exception(err);
                 }
+            }
+
+            // Kiem tra trang thai chi tiet truoc khi chup (xem co anh cu ton dong khong)
+            if (_getErrorDetailsFn != null)
+            {
+                int details = 0;
+                _getErrorDetailsFn(_hCamera, ref details);
+                Log(string.Format("[FUJI CAPTURE STEP 1/6] Trang thai chi tiet truoc khi chup: 0x{0:X} ({1})", details, DecodeErrorDetails(details)));
+            }
+
+            // Dam bao may anh o quyen dieu khien PC
+            if (_setPriorityModeFn != null)
+            {
+                int setPrioRet = _setPriorityModeFn(_hCamera, XSDK_PRIORITY_PC);
+                Log(string.Format("[FUJI CAPTURE STEP 2/6] Dam bao quyen PC (XSDK_SetPriorityMode -> XSDK_PRIORITY_PC): Ret={0}", setPrioRet));
             }
 
             int shotOpt = 1;
             int status = 0;
 
-            // Optional Pre-focus
-            if (autoFocus)
+            // Buoc 3: Lay net truoc (Autofocus S1) neu duoc yeu cau
+            if (autoFocus && _releaseFn != null)
             {
+                Log("[FUJI CAPTURE STEP 3/6] Kich hoat lay net S1ON (Pre-focus)...");
                 try
                 {
-                    if (_releaseFn != null)
-                    {
-                        _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
-                        Thread.Sleep(250);
-                    }
+                    int s1Ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
+                    Log(string.Format("[FUJI CAPTURE STEP 3/6] Ket qua S1ON: Ret={0}, ShotOpt={1}, AfStatus={2} (1=AF OK, 0=AF Fail)", s1Ret, shotOpt, status));
+                    Thread.Sleep(250);
                 }
-                catch { }
+                catch (Exception exAf)
+                {
+                    Log("[FUJI CAPTURE CANH BAO] Ngoai le khi lay net S1ON: " + exAf.Message);
+                }
             }
 
-            // Trigger shutter & strobe flash
+            // Buoc 4: Kich no man trap co hoc & Flash studio (S2 Shutter Release)
+            Log("[FUJI CAPTURE STEP 4/6] [SHOOT] GUI LENH KICH NO MAN TRAP VA DEN FLASH STUDIO (S2_S1OFF)...");
             int releaseRet = -1;
-            if (_releaseExFn != null)
-            {
-                releaseRet = _releaseExFn(_hCamera, XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF, ref shotOpt, ref status);
-            }
-            if (releaseRet != XSDK_COMPLETE && _releaseFn != null)
+
+            // Cach 1: XSDK_Release (S2_S1OFF - Chuan tieu chuan cua Fujifilm SDK)
+            if (_releaseFn != null)
             {
                 releaseRet = _releaseFn(_hCamera, XSDK_RELEASE_S2_S1OFF, ref shotOpt, ref status);
+                Log(string.Format("[FUJI CAPTURE STEP 4/6] Ket qua XSDK_Release (S2_S1OFF): Ret={0}, ShotOpt={1}, AfStatus={2}",
+                    releaseRet, shotOpt, status));
+            }
+
+            // Cach 2: Neu cach 1 that bai, thu XSDK_ReleaseEx (XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF)
+            if (releaseRet != XSDK_COMPLETE && _releaseExFn != null)
+            {
+                Log("[FUJI CAPTURE STEP 4b] Cach 1 that bai, thu ReleaseEx (XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF)...");
+                releaseRet = _releaseExFn(_hCamera, XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF, ref shotOpt, ref status);
+                Log(string.Format("[FUJI CAPTURE STEP 4b] Ket qua XSDK_ReleaseEx: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                    releaseRet, shotOpt, status));
+            }
+
+            // Cach 3: Neu van that bai, thu XSDK_RELEASE_SHOOT_S1OFF
+            if (releaseRet != XSDK_COMPLETE && _releaseFn != null)
+            {
+                Log("[FUJI CAPTURE STEP 4c] Thu phuong thuc XSDK_RELEASE_SHOOT_S1OFF...");
+                releaseRet = _releaseFn(_hCamera, XSDK_RELEASE_SHOOT_S1OFF, ref shotOpt, ref status);
+                Log(string.Format("[FUJI CAPTURE STEP 4c] Ket qua XSDK_RELEASE_SHOOT_S1OFF: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                    releaseRet, shotOpt, status));
             }
 
             if (releaseRet != XSDK_COMPLETE)
             {
-                throw new Exception(string.Format("Fujifilm shutter release failed (Code: {0}, Status: {1})", releaseRet, status));
+                int apiCode = 0;
+                int errCode = 0;
+                if (_getErrorNumberFn != null)
+                {
+                    _getErrorNumberFn(_hCamera, ref apiCode, ref errCode);
+                }
+                string errDesc = DecodeErrorCode(errCode);
+                int details = 0;
+                if (_getErrorDetailsFn != null) _getErrorDetailsFn(_hCamera, ref details);
+
+                string fullErrMsg = string.Format("Loi kich no man trap Fujifilm: Release Ret={0}, AfStatus={1}, APICode=0x{2:X}, ErrCode=0x{3:X} ({4}), Details=0x{5:X} ({6})",
+                    releaseRet, status, apiCode, errCode, errDesc, details, DecodeErrorDetails(details));
+                Log("[FUJI CAPTURE LOI NGHIEM TRONG] " + fullErrMsg);
+                throw new Exception(fullErrMsg);
             }
 
-            // Poll for newly captured image
+            Log("[FUJI CAPTURE STEP 4/6] [OK] Man trap da kich no thanh cong! Dang chuyen sang buoc nhan file anh...");
+
+            // Buoc 5: Lang nghe va keo file anh goc tu bo dem may anh
+            Log("[FUJI CAPTURE STEP 5/6] Dang lang nghe bo dem anh (polling XSDK_ReadImageInfo)...");
             DateTime startWait = DateTime.Now;
             XSDK_ImageInformation imgInfo = new XSDK_ImageInformation();
+            int pollCount = 0;
 
             while ((DateTime.Now - startWait).TotalSeconds < timeoutSeconds)
             {
-                Thread.Sleep(150);
+                Thread.Sleep(120);
+                pollCount++;
 
                 if (_readImageInfoFn != null)
                 {
@@ -325,18 +504,30 @@ namespace Lalestudio.FujifilmBridge
                     imgInfo.lFormat = XSDK_IMAGEFORMAT_NONE;
                     int readInfoRet = _readImageInfoFn(_hCamera, ref imgInfo);
 
+                    if (pollCount % 8 == 0 || readInfoRet == XSDK_COMPLETE)
+                    {
+                        Log(string.Format("[FUJI CAPTURE STEP 5/6] Dang doi anh... (lan {0}, {1:0.0}s, Ret={2}, Format=0x{3:X}, Size={4} bytes)",
+                            pollCount, (DateTime.Now - startWait).TotalSeconds, readInfoRet, imgInfo.lFormat, imgInfo.lDataSize));
+                    }
+
                     if (readInfoRet == XSDK_COMPLETE && imgInfo.lDataSize > 1000 && (imgInfo.lFormat & 0xFF) != XSDK_IMAGEFORMAT_NONE)
                     {
+                        double sizeMb = Math.Round((double)imgInfo.lDataSize / (1024 * 1024), 2);
+                        Log(string.Format("[FUJI CAPTURE STEP 6/6] [OK] DA PHAT HIEN ANH GOC! Format=0x{0:X}, Size={1} bytes ({2} MB), Kich thuoc pixel={3}x{4}",
+                            imgInfo.lFormat, imgInfo.lDataSize, sizeMb, imgInfo.lImagePixWidth, imgInfo.lImagePixHeight));
+
                         byte[] buffer = new byte[imgInfo.lDataSize];
                         GCHandle handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
                         try
                         {
                             IntPtr ptr = handle.AddrOfPinnedObject();
+                            Log(string.Format("[FUJI CAPTURE STEP 6/6] Dang doc {0} bytes du lieu anh qua cap USB (XSDK_ReadImage)...", imgInfo.lDataSize));
                             int readRet = _readImageFn(_hCamera, ptr, (uint)imgInfo.lDataSize);
+                            Log(string.Format("[FUJI CAPTURE STEP 6/6] Ket qua XSDK_ReadImage: Ret={0} (0 = Thanh cong)", readRet));
 
                             if (_deleteImageFn != null)
                             {
-                                _deleteImageFn(_hCamera);
+                                try { _deleteImageFn(_hCamera); } catch { }
                             }
 
                             if (readRet == XSDK_COMPLETE)
@@ -345,7 +536,13 @@ namespace Lalestudio.FujifilmBridge
                                 {
                                     resolution = string.Format("{0}x{1} (26.1 MP)", imgInfo.lImagePixWidth, imgInfo.lImagePixHeight);
                                 }
+                                Log("[FUJI CAPTURE THANH CONG] Da nhan tron ven du lieu anh goc tu may anh Fujifilm!");
+                                Log("========================================================================");
                                 return buffer;
+                            }
+                            else
+                            {
+                                Log("[FUJI CAPTURE LOI] XSDK_ReadImage tra ve ma loi: " + readRet);
                             }
                         }
                         finally
@@ -356,7 +553,16 @@ namespace Lalestudio.FujifilmBridge
                 }
             }
 
-            throw new TimeoutException("Hết thời gian chờ ảnh từ máy ảnh Fujifilm (quá " + timeoutSeconds + "s)");
+            int toApiCode = 0, toErrCode = 0;
+            if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref toApiCode, ref toErrCode);
+            int toDetails = 0;
+            if (_getErrorDetailsFn != null) _getErrorDetailsFn(_hCamera, ref toDetails);
+
+            string timeoutMsg = string.Format("Het thoi gian cho anh tu may anh Fujifilm (qua {0}s). ErrCode=0x{1:X} ({2}), Details=0x{3:X} ({4}). GOI Y XU LY: Hay kiem tra Menu may anh -> 'SAVE IMAGE' / 'PC SHOOT' phai chon 'PC+SD' hoac 'PC ONLY' (khong duoc chon 'CARD ONLY').",
+                timeoutSeconds, toErrCode, DecodeErrorCode(toErrCode), toDetails, DecodeErrorDetails(toDetails));
+            Log("[FUJI CAPTURE TIMEOUT] " + timeoutMsg);
+            Log("========================================================================");
+            throw new TimeoutException(timeoutMsg);
         }
 
         public void Dispose()
@@ -409,7 +615,9 @@ namespace Lalestudio.FujifilmBridge
             {
                 if (!sdk.IsLoaded)
                 {
+                    FujiSdkNative.Log("[MAIN ERROR] Khong the nap XAPI.dll: " + sdk.LastError);
                     OutputJson(false, "Cannot load XAPI.dll: " + sdk.LastError);
+                    Environment.ExitCode = 1;
                     return;
                 }
 
@@ -454,7 +662,8 @@ namespace Lalestudio.FujifilmBridge
             else
             {
                 Console.WriteLine("{{\"success\":false,\"connected\":false,\"cameraName\":null,\"error\":\"{0}\"}}",
-                    EscapeJson(sdk.LastError ?? "Chưa phát hiện máy ảnh Fujifilm cắm qua USB"));
+                    EscapeJson(sdk.LastError ?? "Chua phat hien may anh Fujifilm cam qua USB"));
+                Environment.ExitCode = 1;
             }
         }
 
@@ -463,23 +672,27 @@ namespace Lalestudio.FujifilmBridge
             XSDK_DeviceInformation devInfo;
             if (!sdk.ConnectCamera(out devInfo))
             {
-                OutputJson(false, "Không thể kết nối máy ảnh Fujifilm: " + sdk.LastError);
+                OutputJson(false, "Khong the ket noi may anh Fujifilm: " + sdk.LastError);
+                Environment.ExitCode = 1;
                 return;
             }
 
             bool focused = sdk.TriggerFocus();
             if (focused)
             {
-                Console.WriteLine("{\"success\":true,\"message\":\"Đã kích hoạt lấy nét tự động (FUJIFILM AF)\"}");
+                Console.WriteLine("{\"success\":true,\"message\":\"Da kich hoat lay net tu dong (FUJIFILM AF)\"}");
             }
             else
             {
-                OutputJson(false, "Lỗi kích hoạt lấy nét tự động: " + sdk.LastError);
+                OutputJson(false, "Loi kich hoat lay net tu dong: " + sdk.LastError);
+                Environment.ExitCode = 1;
             }
         }
 
         static void HandleCapture(FujiSdkNative sdk, string saveDir, string orderCode, bool autoFocus)
         {
+            FujiSdkNative.Log(string.Format("[CLI CAPTURE] Bat dau chup anh: Don='{0}', Thu muc='{1}', AF={2}", orderCode, saveDir, autoFocus));
+
             if (!Directory.Exists(saveDir))
             {
                 try { Directory.CreateDirectory(saveDir); } catch { }
@@ -488,7 +701,10 @@ namespace Lalestudio.FujifilmBridge
             XSDK_DeviceInformation devInfo;
             if (!sdk.ConnectCamera(out devInfo))
             {
-                OutputJson(false, "Không thể kết nối máy ảnh Fujifilm: " + sdk.LastError);
+                string err = "Khong the ket noi may anh Fujifilm: " + sdk.LastError;
+                FujiSdkNative.Log("[CLI CAPTURE LOI] " + err);
+                OutputJson(false, err);
+                Environment.ExitCode = 1;
                 return;
             }
 
@@ -496,26 +712,36 @@ namespace Lalestudio.FujifilmBridge
 
             long startTime = Environment.TickCount;
             string resolution;
-            byte[] photoBytes = sdk.CapturePhoto(autoFocus, out resolution);
+            try
+            {
+                byte[] photoBytes = sdk.CapturePhoto(autoFocus, out resolution);
 
-            string filename = string.Format("{0}_{1}_original.jpg", orderCode, DateTime.Now.Ticks);
-            string fullPath = Path.Combine(saveDir, filename);
+                string filename = string.Format("{0}_{1}_original.jpg", orderCode, DateTime.Now.Ticks);
+                string fullPath = Path.Combine(saveDir, filename);
 
-            File.WriteAllBytes(fullPath, photoBytes);
+                File.WriteAllBytes(fullPath, photoBytes);
+                FujiSdkNative.Log(string.Format("[CLI CAPTURE] Da luu file anh thanh cong: {0}", fullPath));
 
-            string base64 = "data:image/jpeg;base64," + Convert.ToBase64String(photoBytes);
-            double sizeMb = Math.Round((double)photoBytes.Length / (1024 * 1024), 2);
-            long elapsedMs = Environment.TickCount - startTime;
+                string base64 = "data:image/jpeg;base64," + Convert.ToBase64String(photoBytes);
+                double sizeMb = Math.Round((double)photoBytes.Length / (1024 * 1024), 2);
+                long elapsedMs = Environment.TickCount - startTime;
 
-            Console.WriteLine("{{\"success\":true,\"source\":\"{0} Original File\",\"cameraName\":\"{0}\",\"filename\":\"{1}\",\"filePath\":\"{2}\",\"fileSizeBytes\":{3},\"fileSizeMb\":\"{4} MB\",\"resolution\":\"{5}\",\"elapsedMs\":{6},\"imageData\":\"{7}\"}}",
-                EscapeJson(model),
-                EscapeJson(filename),
-                EscapeJson(fullPath.Replace("\\", "\\\\")),
-                photoBytes.Length,
-                sizeMb,
-                EscapeJson(resolution),
-                elapsedMs,
-                base64);
+                Console.WriteLine("{{\"success\":true,\"source\":\"{0} Original File\",\"cameraName\":\"{0}\",\"filename\":\"{1}\",\"filePath\":\"{2}\",\"fileSizeBytes\":{3},\"fileSizeMb\":\"{4} MB\",\"resolution\":\"{5}\",\"elapsedMs\":{6},\"imageData\":\"{7}\"}}",
+                    EscapeJson(model),
+                    EscapeJson(filename),
+                    EscapeJson(fullPath.Replace("\\", "\\\\")),
+                    photoBytes.Length,
+                    sizeMb,
+                    EscapeJson(resolution),
+                    elapsedMs,
+                    base64);
+            }
+            catch (Exception ex)
+            {
+                FujiSdkNative.Log("[CLI CAPTURE EXCEPTION] " + ex.Message);
+                OutputJson(false, ex.Message);
+                Environment.ExitCode = 1;
+            }
         }
 
         static void RunHttpDaemon(int port)
@@ -530,32 +756,32 @@ namespace Lalestudio.FujifilmBridge
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine("[FujiBridge Daemon] Error starting HTTP listener on port " + port + ": " + ex.Message);
+                FujiSdkNative.Log("[FujiBridge Daemon] Loi khoi dong HTTP listener port " + port + ": " + ex.Message);
                 return;
             }
 
             Console.WriteLine("========================================================================");
-            Console.WriteLine(" 🌸 LALE STUDIO - FUJIFILM CAMERA BRIDGE DAEMON (NATIVE 64-BIT)");
-            Console.WriteLine(" Port: " + prefix);
-            Console.WriteLine(" Sẵn sàng kích nổ màn trập cơ học FUJIFILM X-T4 & Flash Studio!");
+            Console.WriteLine("  LALE STUDIO - FUJIFILM CAMERA BRIDGE DAEMON (NATIVE 64-BIT)");
+            Console.WriteLine("  Port: " + prefix);
+            Console.WriteLine("  San sang kich no man trap co hoc FUJIFILM X-T4 & Flash Studio!");
             Console.WriteLine("========================================================================");
 
             using (FujiSdkNative sdk = new FujiSdkNative())
             {
                 if (!sdk.IsLoaded)
                 {
-                    Console.Error.WriteLine("[FujiBridge Daemon] ⚠️ Cannot load XAPI.dll: " + sdk.LastError);
+                    FujiSdkNative.Log("[FujiBridge Daemon] [WARN] Khong the nap XAPI.dll: " + sdk.LastError);
                 }
 
                 XSDK_DeviceInformation devInfo = new XSDK_DeviceInformation();
                 bool connected = sdk.ConnectCamera(out devInfo);
                 if (connected)
                 {
-                    Console.WriteLine("[FujiBridge Daemon] ✓ Đã kết nối với máy ảnh: " + (devInfo.strProduct ?? "FUJIFILM"));
+                    Console.WriteLine("[FujiBridge Daemon] [OK] Da ket noi voi may anh: " + (devInfo.strProduct ?? "FUJIFILM"));
                 }
                 else
                 {
-                    Console.WriteLine("[FujiBridge Daemon] Đang chờ kết nối máy ảnh Fujifilm qua USB...");
+                    Console.WriteLine("[FujiBridge Daemon] Dang cho ket noi may anh Fujifilm qua USB...");
                 }
 
                 while (listener.IsListening)
@@ -578,6 +804,7 @@ namespace Lalestudio.FujifilmBridge
                         {
                             try
                             {
+                                FujiSdkNative.Log("[DAEMON EXCEPTION] " + ex.Message);
                                 SendJson(context.Response, 500, string.Format("{{\"success\":false,\"error\":\"{0}\"}}", EscapeJson(ex.Message)));
                             }
                             catch { }
@@ -638,7 +865,7 @@ namespace Lalestudio.FujifilmBridge
                     bool ok = sdk.TriggerFocus();
                     string json = string.Format("{{\"success\":{0},\"message\":\"{1}\"}}",
                         ok ? "true" : "false",
-                        ok ? "Đã kích hoạt lấy nét tự động Fujifilm" : EscapeJson(sdk.LastError ?? "Lấy nét thất bại"));
+                        ok ? "Da kich hoat lay net tu dong Fujifilm" : EscapeJson(sdk.LastError ?? "Lay net that bai"));
                     SendJson(res, ok ? 200 : 500, json);
                 }
                 return;
@@ -666,6 +893,8 @@ namespace Lalestudio.FujifilmBridge
                     }
                 }
 
+                FujiSdkNative.Log(string.Format("[DAEMON CAPTURE] Nhan yeu cau: Don='{0}', Thu muc='{1}', AF={2}", orderCode, saveDir, autoFocus));
+
                 lock (sdk)
                 {
                     if (!Directory.Exists(saveDir))
@@ -675,27 +904,36 @@ namespace Lalestudio.FujifilmBridge
 
                     long startTime = Environment.TickCount;
                     string resolution;
-                    byte[] photoBytes = sdk.CapturePhoto(autoFocus, out resolution);
+                    try
+                    {
+                        byte[] photoBytes = sdk.CapturePhoto(autoFocus, out resolution);
 
-                    string filename = string.Format("{0}_{1}_original.jpg", orderCode, DateTime.Now.Ticks);
-                    string fullPath = Path.Combine(saveDir, filename);
+                        string filename = string.Format("{0}_{1}_original.jpg", orderCode, DateTime.Now.Ticks);
+                        string fullPath = Path.Combine(saveDir, filename);
 
-                    File.WriteAllBytes(fullPath, photoBytes);
+                        File.WriteAllBytes(fullPath, photoBytes);
+                        FujiSdkNative.Log(string.Format("[DAEMON CAPTURE] Da luu file anh thanh cong: {0}", fullPath));
 
-                    string base64 = "data:image/jpeg;base64," + Convert.ToBase64String(photoBytes);
-                    double sizeMb = Math.Round((double)photoBytes.Length / (1024 * 1024), 2);
-                    long elapsedMs = Environment.TickCount - startTime;
+                        string base64 = "data:image/jpeg;base64," + Convert.ToBase64String(photoBytes);
+                        double sizeMb = Math.Round((double)photoBytes.Length / (1024 * 1024), 2);
+                        long elapsedMs = Environment.TickCount - startTime;
 
-                    string json = string.Format("{{\"success\":true,\"source\":\"FUJIFILM X-T4 Original File\",\"cameraName\":\"FUJIFILM X-T4\",\"filename\":\"{0}\",\"filePath\":\"{1}\",\"fileSizeBytes\":{2},\"fileSizeMb\":\"{3} MB\",\"resolution\":\"{4}\",\"elapsedMs\":{5},\"imageData\":\"{6}\"}}",
-                        EscapeJson(filename),
-                        EscapeJson(fullPath.Replace("\\", "\\\\")),
-                        photoBytes.Length,
-                        sizeMb,
-                        EscapeJson(resolution),
-                        elapsedMs,
-                        base64);
+                        string json = string.Format("{{\"success\":true,\"source\":\"FUJIFILM X-T4 Original File\",\"cameraName\":\"FUJIFILM X-T4\",\"filename\":\"{0}\",\"filePath\":\"{1}\",\"fileSizeBytes\":{2},\"fileSizeMb\":\"{3} MB\",\"resolution\":\"{4}\",\"elapsedMs\":{5},\"imageData\":\"{6}\"}}",
+                            EscapeJson(filename),
+                            EscapeJson(fullPath.Replace("\\", "\\\\")),
+                            photoBytes.Length,
+                            sizeMb,
+                            EscapeJson(resolution),
+                            elapsedMs,
+                            base64);
 
-                    SendJson(res, 200, json);
+                        SendJson(res, 200, json);
+                    }
+                    catch (Exception ex)
+                    {
+                        FujiSdkNative.Log("[DAEMON CAPTURE LOI] " + ex.Message);
+                        SendJson(res, 500, string.Format("{{\"success\":false,\"error\":\"{0}\"}}", EscapeJson(ex.Message)));
+                    }
                 }
                 return;
             }
