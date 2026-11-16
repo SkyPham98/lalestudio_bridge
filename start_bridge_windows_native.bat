@@ -15,10 +15,6 @@ echo [INFO] Dang khoi dong Native Bridge tren cong 4000...
 echo [INFO] Ho tro tu dong nhan dien Canon EOS R50 hoac FUJIFILM X-T4!
 echo.
 
-if exist "%~dp0start_fuji_daemon.bat" (
-    powershell -NoProfile -Command "if (-not (Get-Process -Name 'fuji_bridge' -ErrorAction SilentlyContinue)) { Start-Process -FilePath '%~dp0start_fuji_daemon.bat' -WindowStyle Minimized }"
-)
-
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0bridge_windows.ps1"
 
 echo.

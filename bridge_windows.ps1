@@ -154,31 +154,6 @@ function Test-PortListening {
     return $false
 }
 
-# Tu dong khoi chay Fujifilm Background Daemon tren cong 5514 neu chua chay
-function Ensure-FujiDaemonRunning {
-    if (-not $global:FujiBridgeExe -or -not (Test-Path $global:FujiBridgeExe)) { return }
-    if (Test-PortListening -Port 5514 -TimeoutMs 150) { return }
-
-    try {
-        Write-Host " [INFO] Tu dong khoi chay Fujifilm Background Daemon tren cong 5514..." -ForegroundColor Cyan
-        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pinfo.FileName = $global:FujiBridgeExe
-        $pinfo.Arguments = "daemon 5514"
-        $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
-        $pinfo.UseShellExecute = $false
-        $pinfo.CreateNoWindow = $true
-        [System.Diagnostics.Process]::Start($pinfo) | Out-Null
-        Start-Sleep -Milliseconds 600
-        if (Test-PortListening -Port 5514 -TimeoutMs 500) {
-            Write-Host " [OK] Fujifilm Background Daemon da san sang tren cong 5514!" -ForegroundColor Green
-        }
-    } catch {
-        Write-Host " [CANH BAO] Khong the tu dong bat Daemon: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-
-Ensure-FujiDaemonRunning
-
 # Cache driver may anh dang hoat dong de tranh tre (latency) khi chup
 $global:ActiveCameraDriver = $null
 
@@ -725,6 +700,10 @@ while ($true) {
 
                             # 2. Neu Daemon chua chay hoac loi, goi truc tiep qua CLI fuji_bridge.exe
                             if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+                                # Giai phong bat ky tien trinh fuji_bridge nao dang chiem cong USB de tranh loi 0x1001 SEQUENCE
+                                Get-Process -Name "fuji_bridge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                                Start-Sleep -Milliseconds 150
+
                                 Write-Host "[FUJI BRIDGE STEP 2b] Khoi chay truc tiep CLI: $global:FujiBridgeExe capture..." -ForegroundColor Cyan
                                 try {
                                     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
