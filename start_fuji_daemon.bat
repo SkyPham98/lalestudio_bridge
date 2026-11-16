@@ -2,7 +2,7 @@
 title Lale Studio - Fujifilm SDK Daemon (Port 5514)
 color 0a
 echo ========================================================================
-echo  🌸 LALE STUDIO - FUJIFILM CAMERA CONTROL DAEMON (PORT 5514)
+echo  LALE STUDIO - FUJIFILM CAMERA CONTROL DAEMON (PORT 5514)
 echo  Ket noi truc tiep may anh FUJIFILM X-T4 qua USB Tether
 echo ========================================================================
 echo.

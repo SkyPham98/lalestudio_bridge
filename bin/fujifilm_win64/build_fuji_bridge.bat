@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ========================================================================
-echo   🌸 LALE STUDIO - BIEN DICH FUJIFILM CAMERA BRIDGE (WIN 64-BIT)
+echo   LALE STUDIO - BIEN DICH FUJIFILM CAMERA BRIDGE (WIN 64-BIT)
 echo ========================================================================
 cd /d "%~dp0"
 

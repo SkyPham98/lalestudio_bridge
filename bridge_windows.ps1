@@ -1,7 +1,7 @@
 # ========================================================================
-# 🌸 LALÉ PHOTO STUDIO - NATIVE WINDOWS CAMERA BRIDGE (AUTO-RECONNECT)
-# Chạy trực tiếp trên Windows 10/11 - KHÔNG CẦN CÀI ĐẶT NODE.JS!
-# Tự động phát hiện IP của digiCamControl, tự động kết nối lại từ đầu khi mất kết nối
+#  LALE PHOTO STUDIO - NATIVE WINDOWS CAMERA BRIDGE (AUTO-RECONNECT)
+# Chay truc tiep tren Windows 10/11 - KHONG CAN CAI DAT NODE.JS!
+# Tu dong phat hien IP cua digiCamControl, tu dong ket noi lai tu dau khi mat ket noi
 # ========================================================================
 
 param (
@@ -10,7 +10,7 @@ param (
     [string]$PhotoDir = "C:\LalePhotos"
 )
 
-# Đọc cấu hình từ config.json nếu có
+# Doc cau hinh tu config.json neu co
 $configPath = Join-Path $PSScriptRoot "config.json"
 if (Test-Path $configPath) {
     try {
@@ -24,7 +24,7 @@ if (Test-Path $configPath) {
     } catch {}
 }
 
-# Đảm bảo thư mục lưu ảnh tồn tại
+# Dam bao thu muc luu anh ton tai
 if (-not (Test-Path -Path $PhotoDir)) {
     try {
         New-Item -ItemType Directory -Path $PhotoDir -Force | Out-Null
@@ -34,7 +34,7 @@ if (-not (Test-Path -Path $PhotoDir)) {
     }
 }
 
-# Các thư mục ảnh tiềm năng để theo dõi
+# Cac thu muc anh tiem nang de theo doi
 $potentialPhotoDirs = [System.Collections.Generic.List[string]]::new()
 $potentialPhotoDirs.Add($PhotoDir)
 $defaultDccPicDir = Join-Path ([Environment]::GetFolderPath('MyPictures')) "digiCamControl"
@@ -43,16 +43,16 @@ $localCapturedDir = Join-Path $PSScriptRoot "captured_photos"
 if (Test-Path $localCapturedDir) { $potentialPhotoDirs.Add($localCapturedDir) }
 
 Write-Host "========================================================================" -ForegroundColor Magenta
-Write-Host " 🌸 LALE PHOTO STUDIO - NATIVE HARDWARE CAMERA BRIDGE (AUTO-RECONNECT)" -ForegroundColor Cyan
+Write-Host "  LALE PHOTO STUDIO - NATIVE HARDWARE CAMERA BRIDGE (AUTO-RECONNECT)" -ForegroundColor Cyan
 Write-Host "========================================================================" -ForegroundColor Magenta
 Write-Host " [INFO] Cong Bridge Kiosk: http://127.0.0.1:$Port" -ForegroundColor Yellow
 Write-Host " [INFO] Thu muc luu anh:   $PhotoDir" -ForegroundColor Yellow
 
 [System.Net.WebRequest]::DefaultWebProxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
 
-# Hàm tìm kiếm tiện ích CameraControlRemoteCmd.exe (IPC Direct)
+# Ham tim kiem tien ich CameraControlRemoteCmd.exe (IPC Direct)
 function Get-DccRemoteCmdPath {
-    # 1. Tìm từ tiến trình CameraControl đang chạy trong Windows
+    # 1. Tim tu tien trinh CameraControl dang chay trong Windows
     try {
         $cimProc = Get-CimInstance Win32_Process -Filter "Name = 'CameraControl.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($cimProc -and $cimProc.ExecutablePath) {
@@ -71,7 +71,7 @@ function Get-DccRemoteCmdPath {
         }
     } catch {}
 
-    # 2. Tìm qua các đường dẫn cài đặt tiêu chuẩn
+    # 2. Tim qua cac duong dan cai dat tieu chuan
     $candidates = @(
         "C:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe",
         "C:\Program Files\digiCamControl\CameraControlRemoteCmd.exe",
@@ -84,7 +84,7 @@ function Get-DccRemoteCmdPath {
         if (Test-Path $cand) { return $cand }
     }
 
-    # 3. Tìm qua Registry
+    # 3. Tim qua Registry
     try {
         $regPath = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\CameraControl.exe" -ErrorAction SilentlyContinue)."(default)"
         if ($regPath) {
@@ -104,7 +104,7 @@ if ($global:RemoteCmdExe) {
     Write-Host " [CHU Y] Chua phat hien CameraControlRemoteCmd.exe. Se tu dong do tim khi digiCamControl khoi chay." -ForegroundColor Yellow
 }
 
-# Khởi tạo và tự động biên dịch FujiBridge cho Fujifilm nếu cần
+# Khoi tao va tu dong bien dich FujiBridge cho Fujifilm neu can
 $global:FujiBridgeExe = Join-Path $PSScriptRoot "bin\fujifilm_win64\fuji_bridge.exe"
 if (-not (Test-Path $global:FujiBridgeExe)) {
     $csSource = Join-Path $PSScriptRoot "bin\fujifilm_win64\FujiBridge.cs"
@@ -126,7 +126,7 @@ if (Test-Path $global:FujiBridgeExe) {
     Write-Host " [OK] TIM THAY TIEN ICH FUJIFILM BRIDGE: $global:FujiBridgeExe" -ForegroundColor Green
 }
 
-# Hàm kiểm tra trạng thái máy ảnh Fujifilm (Daemon HTTP 5514 hoặc fuji_bridge.exe CLI)
+# Ham kiem tra trang thai may anh Fujifilm (Daemon HTTP 5514 hoac fuji_bridge.exe CLI)
 function Find-FujifilmCamera {
     try {
         $check = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/status" -TimeoutSec 1 -ErrorAction Stop
@@ -166,10 +166,10 @@ function Find-FujifilmCamera {
         } catch {}
     }
 
-    return @{ connected = $false; cameraName = $null; method = "none"; resolution = "Chưa kết nối" }
+    return @{ connected = $false; cameraName = $null; method = "none"; resolution = "Chua ket noi" }
 }
 
-# Hàm lấy driver máy ảnh tích cực (Canon hoặc Fujifilm)
+# Ham lay driver may anh tich cuc (Canon hoac Fujifilm)
 function Get-ActiveCameraInfo {
     param ([string]$ManualDccUrl)
 
@@ -200,14 +200,14 @@ function Get-ActiveCameraInfo {
     return @{
         driver = if ($dcc.online) { "digicamcontrol" } else { "none" }
         connected = $false
-        cameraName = if ($dcc.online) { $dcc.cameraName } else { "Chưa nhận diện máy ảnh (Hỗ trợ Canon EOS & FUJIFILM X-T4)" }
+        cameraName = if ($dcc.online) { $dcc.cameraName } else { "Chua nhan dien may anh (Ho tro Canon EOS & FUJIFILM X-T4)" }
         source = if ($dcc.online) { "digiCamControl ($($dcc.url))" } else { "None" }
-        resolution = "Chưa xác định"
+        resolution = "Chua xac dinh"
         dcc = $dcc
     }
 }
 
-# Hàm tự động dò tìm IP hoặc tiến trình của digiCamControl
+# Ham tu dong do tim IP hoac tien trinh cua digiCamControl
 function Find-DigiCamControlUrl {
     param ([string]$ManualUrl)
 
@@ -231,7 +231,7 @@ function Find-DigiCamControlUrl {
 
     $uniqueUrls = $urlsToTest | Select-Object -Unique
 
-    # 1. Thử HTTP Webserver (port 5513)
+    # 1. Thu HTTP Webserver (port 5513)
     foreach ($testUrl in $uniqueUrls) {
         try {
             $check = Invoke-RestMethod -Uri "$testUrl/?CMD=Get_Current_Value&Param=cameraname" -TimeoutSec 2 -ErrorAction Stop
@@ -249,7 +249,7 @@ function Find-DigiCamControlUrl {
         } catch {}
     }
 
-    # 2. Nếu HTTP không phản hồi: KIỂM TRA TIẾN TRÌNH DIGICAMCONTROL ĐANG CHẠY TRÊN WINDOWS
+    # 2. Neu HTTP khong phan hoi: KIEM TRA TIEN TRINH DIGICAMCONTROL DANG CHAY TREN WINDOWS
     $proc = Get-Process -Name "CameraControl" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($proc) {
         if (-not $global:RemoteCmdExe) {
@@ -285,14 +285,14 @@ function Find-DigiCamControlUrl {
 
     return @{ 
         url = "http://127.0.0.1:5513"
-        cameraName = "Chưa nhận diện máy ảnh"
+        cameraName = "Chua nhan dien may anh"
         connected = $false
         online = $false 
         method = "none"
     }
 }
 
-# Cấu hình session của digiCamControl
+# Cau hinh session cua digiCamControl
 function Configure-DccSession {
     param (
         [string]$TargetUrl,
@@ -315,7 +315,7 @@ function Configure-DccSession {
     }
 }
 
-# Lấy frame LiveView an toàn với timeout ngắn (tránh treo luồng)
+# Lay frame LiveView an toan voi timeout ngan (tranh treo luong)
 function Get-LiveViewBytes {
     param ([string]$TargetUrl)
     try {
@@ -367,7 +367,7 @@ function Handle-OptionsRequest($response) {
     }
 }
 
-# Quản lý trạng thái kết nối máy ảnh tự động
+# Quan ly trang thai ket noi may anh tu dong
 $script:isCameraConnected = $false
 $script:sessionConfigured = $false
 $script:lastHealthCheckSec = 0
@@ -395,7 +395,7 @@ function Test-And-AutoReconnect {
             $cfg = Configure-DccSession -TargetUrl $check.url -TargetDir $PhotoDir
             $script:sessionConfigured = $cfg
 
-            # Đánh thức Live View & Focus
+            # Danh thuc Live View & Focus
             try {
                 Invoke-RestMethod -Uri "$($check.url)/?CMD=LiveViewWnd_Show" -TimeoutSec 2 -ErrorAction SilentlyContinue | Out-Null
                 Start-Sleep -Milliseconds 400
@@ -419,7 +419,7 @@ function Test-And-AutoReconnect {
     }
 }
 
-# Khởi tạo kiểm tra ban đầu
+# Khoi tao kiem tra ban dau
 $initialDcc = Find-DigiCamControlUrl -ManualUrl $DccUrl
 $DccUrl = $initialDcc.url
 if ($initialDcc.connected) {
@@ -435,7 +435,7 @@ if ($initialDcc.connected) {
 Write-Host "========================================================================" -ForegroundColor Magenta
 Write-Host " [SAN SANG] Dang cho lenh chup tu Kiosk phong chup..." -ForegroundColor White
 
-# VÒNG LẶP BẤT TỬ (Never Exit): Tự động khôi phục nếu listener gặp sự cố bất ngờ
+# VONG LAP BAT TU (Never Exit): Tu dong khoi phuc neu listener gap su co bat ngo
 while ($true) {
     $listener = New-Object System.Net.HttpListener
     $prefix = "http://127.0.0.1:$Port/"
@@ -459,12 +459,12 @@ while ($true) {
                 try {
                     $context = $listener.GetContext()
                 } catch {
-                    break # Listener bị hủy hoặc đóng, thoát để khởi động lại
+                    break # Listener bi huy hoac dong, thoat de khoi dong lai
                 }
 
-                # Xử lý an toàn từng request - không bao giờ để exception làm sập listener
+                # Xu ly an toan tung request - khong bao gio de exception lam sap listener
                 try {
-                    # Kiểm tra và tự động kết nối lại camera nếu cần
+                    # Kiem tra va tu dong ket noi lai camera neu can
                     Test-And-AutoReconnect
 
                     $request = $context.Request
@@ -472,7 +472,7 @@ while ($true) {
                     $rawUrl = $request.RawUrl
                     $method = $request.HttpMethod
 
-                    # Xử lý CORS Preflight
+                    # Xu ly CORS Preflight
                     if ($method -eq "OPTIONS") {
                         Handle-OptionsRequest -response $response
                         continue
@@ -507,7 +507,7 @@ while ($true) {
                         continue
                     }
 
-                    # 1b. API FOCUS: /api/focus (Kích hoạt lấy nét Canon R50 / FUJIFILM X-T4)
+                    # 1b. API FOCUS: /api/focus (Kich hoat lay net Canon R50 / FUJIFILM X-T4)
                     if ($rawUrl -match "^/api/focus") {
                         Write-Host "`n[LAY NET] Nhan lenh lay net tu Kiosk!..." -ForegroundColor Green
                         $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
@@ -530,7 +530,7 @@ while ($true) {
 
                             $focusResult = @{
                                 success = $focused
-                                message = if ($focused) { "Đã kích hoạt autofocus FUJIFILM" } else { "Lấy nét Fujifilm thất bại" }
+                                message = if ($focused) { "Da kich hoat autofocus FUJIFILM" } else { "Lay net Fujifilm that bai" }
                             }
                             Send-JsonResponse -response $response -statusCode 200 -jsonObj $focusResult
                             continue
@@ -555,7 +555,7 @@ while ($true) {
                         }
                         $focusResult = @{
                             success = $true
-                            message = "Đã kích hoạt lấy nét máy ảnh Canon R50"
+                            message = "Da kich hoat lay net may anh Canon R50"
                         }
                         Send-JsonResponse -response $response -statusCode 200 -jsonObj $focusResult
                         continue
@@ -565,7 +565,7 @@ while ($true) {
                     if ($rawUrl -match "^/api/capture" -and $method -eq "POST") {
                         Write-Host "`n[CHUP ANH] Nhan lenh tu Kiosk phong chup! Dang kich hoat co may anh & Flash..." -ForegroundColor Cyan
 
-                        # Đọc orderCode
+                        # Doc orderCode
                         $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
                         $body = $reader.ReadToEnd()
                         $reader.Close()
@@ -580,15 +580,15 @@ while ($true) {
                             } catch {}
                         }
 
-                        # Kiểm tra máy ảnh hiện tại (FUJIFILM hoặc CANON)
+                        # Kiem tra may anh hien tai (FUJIFILM hoac CANON)
                         $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
 
-                        # A. XỬ LÝ CHỤP ẢNH BẰNG FUJIFILM (26.1 MP)
+                        # A. XU LY CHUP ANH BANG FUJIFILM (26.1 MP)
                         if ($camInfo.driver -eq "fujifilm") {
-                            Write-Host "[FUJI] 📸 Kich hoat man trap FUJIFILM va Flash studio (26.1 MP)..." -ForegroundColor Cyan
+                            Write-Host "[FUJI] Kich hoat man trap FUJIFILM va Flash studio (26.1 MP)..." -ForegroundColor Cyan
                             $fujiCaptured = $null
 
-                            # Ưu tiên qua Daemon HTTP 5514
+                            # Uu tien qua Daemon HTTP 5514
                             try {
                                 $postBody = @{ orderCode = $orderCode; photoSaveDir = $PhotoDir; autoFocus = $true } | ConvertTo-Json
                                 $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 15 -ErrorAction Stop
@@ -597,7 +597,7 @@ while ($true) {
                                 }
                             } catch {}
 
-                            # Thử qua CLI fuji_bridge.exe nếu daemon chưa chạy
+                            # Thu qua CLI fuji_bridge.exe neu daemon chua chay
                             if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
                                 try {
                                     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -623,14 +623,14 @@ while ($true) {
                             } else {
                                 $errResult = @{
                                     success = $false
-                                    message = "Lỗi chụp ảnh FUJIFILM: Không nhận được phản hồi từ camera."
+                                    message = "Loi chup anh FUJIFILM: Khong nhan duoc phan hoi tu camera."
                                 }
                                 Send-JsonResponse -response $response -statusCode 500 -jsonObj $errResult
                                 continue
                             }
                         }
 
-                        # B. XỬ LÝ CHỤP ẢNH BẰNG CANON / DIGICAMCONTROL (Giữ nguyên 100%)
+                        # B. XU LY CHUP ANH BANG CANON / DIGICAMCONTROL (Giu nguyen 100%)
                         $probe = Find-DigiCamControlUrl -ManualUrl $DccUrl
                         $DccUrl = $probe.url
 
@@ -645,20 +645,20 @@ while ($true) {
                             $errResult = @{
                                 success = $false
                                 cameraDisconnected = $true
-                                message = "Máy ảnh Canon chưa kết nối hoặc chưa mở phần mềm digiCamControl trên máy tính!"
+                                message = "May anh Canon chua ket noi hoac chua mo phan mem digiCamControl tren may tinh!"
                             }
                             Send-JsonResponse -response $response -statusCode 503 -jsonObj $errResult
                             continue
                         }
 
-                        # 0. Lấy tên ảnh gần nhất trước khi chụp để so sánh (lastcaptured)
+                        # 0. Lay ten anh gan nhat truoc khi chup de so sanh (lastcaptured)
                         $prevLastCaptured = ""
                         try {
                             $prevRes = Invoke-RestMethod -Uri "$DccUrl/?slc=get&param1=lastcaptured" -TimeoutSec 1 -ErrorAction SilentlyContinue
                             if ($prevRes) { $prevLastCaptured = $prevRes.ToString().Trim() }
                         } catch {}
 
-                        # Thêm thư mục session đang hoạt động của digiCamControl vào danh sách theo dõi
+                        # Them thu muc session dang hoat dong cua digiCamControl vao danh sach theo doi
                         try {
                             $sessFolderRes = Invoke-RestMethod -Uri "$DccUrl/?slc=get&param1=session.folder" -TimeoutSec 1 -ErrorAction SilentlyContinue
                             if ($sessFolderRes) {
@@ -675,13 +675,13 @@ while ($true) {
 
                         Write-Host "[DCC] Dang goi lenh Shutter toi: $DccUrl (Che do: $liveViewSource)" -ForegroundColor White
 
-                        # 1. Phát lệnh chụp: ƯU TIÊN 1 qua CameraControlRemoteCmd.exe (Direct IPC - 100% đồng bộ nút bấm GUI)
+                        # 1. Phat lenh chup: UU TIEN 1 qua CameraControlRemoteCmd.exe (Direct IPC - 100% dong bo nut bam GUI)
                         $remoteCmdExe = $global:RemoteCmdExe
                         if (-not $remoteCmdExe) { $remoteCmdExe = Get-DccRemoteCmdPath }
 
-                        # 🎯 TỰ ĐỘNG LẤY NÉT (PRE-FOCUS) TRƯỚC KHI MỞ MÀN TRẬP
+                        # [AF] TU DONG LAY NET (PRE-FOCUS) TRUOC KHI MO MAN TRAP
                         if ($liveViewSource -ne "usb") {
-                            Write-Host "[LAY NET] 🎯 Tu dong lay net (Pre-focus Dual Pixel AF) cho Canon R50..." -ForegroundColor Green
+                            Write-Host "[LAY NET] [AF] Tu dong lay net (Pre-focus Dual Pixel AF) cho Canon R50..." -ForegroundColor Green
                             if ($remoteCmdExe) {
                                 try {
                                     Start-Process -FilePath $remoteCmdExe -ArgumentList "/c", "LiveView_Focus" -WindowStyle Hidden -ErrorAction SilentlyContinue
@@ -695,7 +695,7 @@ while ($true) {
                         }
 
                         if ($remoteCmdExe -and ($liveViewSource -ne "usb")) {
-                            Write-Host "[DCC] 🚀 [IPC DIRECT] Dang kich hoat man trap va flash qua CLI: $remoteCmdExe" -ForegroundColor Cyan
+                            Write-Host "[DCC]  [IPC DIRECT] Dang kich hoat man trap va flash qua CLI: $remoteCmdExe" -ForegroundColor Cyan
                             try {
                                 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
                                 $pinfo.FileName = $remoteCmdExe
@@ -714,7 +714,7 @@ while ($true) {
                             }
                         }
 
-                        # ƯU TIÊN 2: Kích hoạt qua HTTP Webserver nếu chưa kích hoạt qua CLI
+                        # UU TIEN 2: Kich hoat qua HTTP Webserver neu chua kich hoat qua CLI
                         if (-not $triggerSuccess) {
                             if ($liveViewSource -ne "usb") {
                                 $captureUrls = @(
@@ -731,8 +731,8 @@ while ($true) {
                                         Write-Host "[DCC] Phan hoi: $resStr" -ForegroundColor Gray
                                         if ($resStr.ToLower().Contains("not allowed") -or $resStr.ToLower().Contains("disabled")) {
                                             Write-Host "========================================================================" -ForegroundColor Red
-                                            Write-Host "🚨 [CANH BAO] digiCamControl dang TAT: 'Allow interaction via webserver'!" -ForegroundColor Red
-                                            Write-Host "👉 Vao digiCamControl -> File -> Settings -> Webserver: Tich chon 'Allow interaction via webserver'!" -ForegroundColor Yellow
+                                            Write-Host "[CANH BAO] [CANH BAO] digiCamControl dang TAT: 'Allow interaction via webserver'!" -ForegroundColor Red
+                                            Write-Host "-> Vao digiCamControl -> File -> Settings -> Webserver: Tich chon 'Allow interaction via webserver'!" -ForegroundColor Yellow
                                             Write-Host "========================================================================" -ForegroundColor Red
                                         } elseif (-not $resStr.ToLower().Contains("error")) {
                                             $triggerSuccess = $true
@@ -758,7 +758,7 @@ while ($true) {
                             }
                         }
 
-                        # 2. Chờ đợi file ảnh mới xuất hiện: Kết hợp dò tìm thư mục + hỏi trực tiếp API lastcaptured
+                        # 2. Cho doi file anh moi xuat hien: Ket hop do tim thu muc + hoi truc tiep API lastcaptured
                         $foundFile = $null
                         $timeoutSeconds = 9
                         $waited = 0
@@ -768,7 +768,7 @@ while ($true) {
                             Start-Sleep -Milliseconds 250
                             $waited++
 
-                            # A. Kiểm tra API lastcaptured của digiCamControl
+                            # A. Kiem tra API lastcaptured cua digiCamControl
                             try {
                                 $currCapturedRes = Invoke-RestMethod -Uri "$DccUrl/?slc=get&param1=lastcaptured" -TimeoutSec 1 -ErrorAction SilentlyContinue
                                 if ($currCapturedRes) {
@@ -792,7 +792,7 @@ while ($true) {
                                 }
                             } catch {}
 
-                            # B. Quét các thư mục lưu ảnh
+                            # B. Quet cac thu muc luu anh
                             foreach ($dir in $potentialPhotoDirs) {
                                 if (Test-Path $dir) {
                                     $latest = Get-ChildItem -Path $dir -Include *.jpg,*.jpeg,*.png -File -Recurse -ErrorAction SilentlyContinue | 
@@ -813,7 +813,7 @@ while ($true) {
                         }
                         Write-Host ""
 
-                        # Cách 1: Đọc file ảnh từ ổ đĩa nếu tìm thấy
+                        # Cach 1: Doc file anh tu o dia neu tim thay
                         if ($foundFile -and (Test-Path $foundFile)) {
                             try {
                                 $bytes = [System.IO.File]::ReadAllBytes($foundFile)
@@ -835,7 +835,7 @@ while ($true) {
                                 }
                                 Send-JsonResponse -response $response -statusCode 200 -jsonObj $result
 
-                                # Chỉ khôi phục Live View nếu người dùng đang dùng chế độ USB
+                                # Chi khoi phuc Live View neu nguoi dung dang dung che do USB
                                 if ($liveViewSource -eq "usb") {
                                     try {
                                         Invoke-RestMethod -Uri "$DccUrl/?CMD=LiveViewWnd_Show" -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
@@ -854,7 +854,7 @@ while ($true) {
                             }
                         }
 
-                        # Cách 2: Dự phòng tải ảnh trực tiếp từ Web Server của digiCamControl (/preview.jpg)
+                        # Cach 2: Du phong tai anh truc tiep tu Web Server cua digiCamControl (/preview.jpg)
                         Write-Host "[FALLBACK] Dang thu tai anh truc tiep tu digiCamControl Webserver ($DccUrl/preview.jpg)..." -ForegroundColor Cyan
                         try {
                             $wc = New-Object System.Net.WebClient
@@ -896,7 +896,7 @@ while ($true) {
                             Write-Host "[FALLBACK] Khong the lay anh tu preview.jpg: $($_.Exception.Message)" -ForegroundColor Yellow
                         }
 
-                        # Thất bại: Không nhận được file ảnh sau khi bấm cò
+                        # That bai: Khong nhan duoc file anh sau khi bam co
                         Write-Host "[LOI] Khong tim thay file anh moi tu may anh trong C:\LalePhotos." -ForegroundColor Red
                         $errResult = @{
                             success = $false
@@ -989,7 +989,7 @@ while ($true) {
                         continue
                     }
 
-                    # Route khác
+                    # Route khac
                     Send-JsonResponse -response $response -statusCode 404 -jsonObj @{ error = "Not found" }
 
                 } catch {
