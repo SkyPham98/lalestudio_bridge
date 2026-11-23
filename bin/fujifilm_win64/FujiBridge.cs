@@ -452,44 +452,23 @@ namespace Lalestudio.FujifilmBridge
             if (_setPriorityModeFn != null)
             {
                 EnsurePriorityMode(XSDK_PRIORITY_PC);
-                Log("[FUJI CAPTURE STEP 2/6] Kiem tra quyen PC hoan tat");
+                Log("[FUJI CAPTURE STEP 2/5] Kiem tra quyen PC hoan tat");
             }
 
+            int releaseRet = -1;
             int shotOpt = 1;
             int status = 0;
 
-            // Buoc 3: Lay net truoc (Autofocus S1) neu duoc yeu cau
-            if (autoFocus && _releaseFn != null)
-            {
-                Log("[FUJI CAPTURE STEP 3/6] Kich hoat lay net S1ON (Pre-focus)...");
-                try
-                {
-                    int s1Ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
-                    string afNote = (status == 1 || status == 5) ? "[OK: Da khoa net]" : (status == 4 ? "[OK: Tieu cu co dinh]" : (status == 2 ? "[Chua kiem tra]" : "[Trang thai: " + status + "]"));
-                    Log(string.Format("[FUJI CAPTURE STEP 3/6] Ket qua S1ON: Ret={0}, ShotOpt={1}, AfStatus={2} {3}", s1Ret, shotOpt, status, afNote));
-                    if (s1Ret != XSDK_COMPLETE)
-                    {
-                        // Neu S1ON khong thanh cong (VD dang o Manual Focus), huy nua co de tranh treo
-                        int cancelOpt = 1, cancelStatus = 0;
-                        _releaseFn(_hCamera, XSDK_RELEASE_N_S1OFF, ref cancelOpt, ref cancelStatus);
-                    }
-                    Thread.Sleep(20);
-                }
-                catch (Exception exAf)
-                {
-                    Log("[FUJI CAPTURE CANH BAO] Ngoai le khi lay net S1ON: " + exAf.Message);
-                }
-            }
-
-            // Buoc 4: Kich no man trap co hoc & Flash studio (S2 Shutter Release)
-            Log("[FUJI CAPTURE STEP 4/6] [SHOOT] GUI LENH KICH NO MAN TRAP VA DEN FLASH STUDIO (S2_S1OFF)...");
-            int releaseRet = -1;
+            // Buoc 3: Kich no man trap co hoc & Flash studio (S2 Shutter Release)
+            Log("[FUJI CAPTURE STEP 3/5] [SHOOT] GUI LENH KICH NO MAN TRAP VA DEN FLASH STUDIO...");
 
             // Cach 1: XSDK_Release (S2_S1OFF - Chuan tieu chuan cua Fujifilm SDK)
             if (_releaseFn != null)
             {
                 for (int tryS2 = 1; tryS2 <= 3; tryS2++)
                 {
+                    shotOpt = 1; // LUON RESET SHOTOPT = 1 TRUOC KHI GOI (tranh loi 0x1008 do shotOpt=0)
+                    status = 0;
                     releaseRet = _releaseFn(_hCamera, XSDK_RELEASE_S2_S1OFF, ref shotOpt, ref status);
                     if (releaseRet == XSDK_COMPLETE) break;
 
@@ -497,43 +476,49 @@ namespace Lalestudio.FujifilmBridge
                     if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref apiCode, ref errCode);
                     if (errCode == 0x1006 || errCode == 0x1016) // BUSY
                     {
-                        Log(string.Format("[FUJI CAPTURE STEP 4/6] Camera dang ban (BUSY 0x{0:X}) o lan {1}, doi 100ms...", errCode, tryS2));
-                        Thread.Sleep(100);
+                        Log(string.Format("[FUJI CAPTURE STEP 3/5] Camera dang ban (BUSY 0x{0:X}) o lan {1}, doi 80ms...", errCode, tryS2));
+                        Thread.Sleep(80);
                         continue;
                     }
                     break;
                 }
-                Log(string.Format("[FUJI CAPTURE STEP 4/6] Ket qua XSDK_Release (S2_S1OFF): Ret={0}, ShotOpt={1}, AfStatus={2}",
+                Log(string.Format("[FUJI CAPTURE STEP 3/5] Ket qua XSDK_Release (S2_S1OFF): Ret={0}, ShotOpt={1}, AfStatus={2}",
                     releaseRet, shotOpt, status));
             }
 
             // Cach 2: Neu cach 1 that bai, thu XSDK_ReleaseEx (XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF)
             if (releaseRet != XSDK_COMPLETE && _releaseExFn != null)
             {
-                Thread.Sleep(120);
-                Log("[FUJI CAPTURE STEP 4b] Cach 1 that bai, thu ReleaseEx (XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF)...");
+                Thread.Sleep(60);
+                Log("[FUJI CAPTURE STEP 3b] Cach 1 that bai, thu ReleaseEx (XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF)...");
+                shotOpt = 1; // LUON RESET SHOTOPT = 1
+                status = 0;
                 releaseRet = _releaseExFn(_hCamera, XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF, ref shotOpt, ref status);
-                Log(string.Format("[FUJI CAPTURE STEP 4b] Ket qua XSDK_ReleaseEx: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                Log(string.Format("[FUJI CAPTURE STEP 3b] Ket qua XSDK_ReleaseEx: Ret={0}, ShotOpt={1}, AfStatus={2}",
                     releaseRet, shotOpt, status));
             }
 
             // Cach 2b: Thu ReleaseEx chu trinh tron goi (S1_ON_S2_ON_S2_OFF_S1_OFF)
             if (releaseRet != XSDK_COMPLETE && _releaseExFn != null)
             {
-                Thread.Sleep(120);
-                Log("[FUJI CAPTURE STEP 4c] Thu ReleaseEx tron goi (S1_ON_S2_ON_S2_OFF_S1_OFF)...");
+                Thread.Sleep(60);
+                Log("[FUJI CAPTURE STEP 3c] Thu ReleaseEx tron goi (S1_ON_S2_ON_S2_OFF_S1_OFF)...");
+                shotOpt = 1; // LUON RESET SHOTOPT = 1
+                status = 0;
                 releaseRet = _releaseExFn(_hCamera, XSDK_RELEASE_EX_S1_ON_S2_ON_S2_OFF_S1_OFF, ref shotOpt, ref status);
-                Log(string.Format("[FUJI CAPTURE STEP 4c] Ket qua ReleaseEx Full: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                Log(string.Format("[FUJI CAPTURE STEP 3c] Ket qua ReleaseEx Full: Ret={0}, ShotOpt={1}, AfStatus={2}",
                     releaseRet, shotOpt, status));
             }
 
             // Cach 3: Neu van that bai, thu XSDK_RELEASE_SHOOT_S1OFF
             if (releaseRet != XSDK_COMPLETE && _releaseFn != null)
             {
-                Thread.Sleep(120);
-                Log("[FUJI CAPTURE STEP 4d] Thu phuong thuc XSDK_RELEASE_SHOOT_S1OFF...");
+                Thread.Sleep(60);
+                Log("[FUJI CAPTURE STEP 3d] Thu phuong thuc XSDK_RELEASE_SHOOT_S1OFF...");
+                shotOpt = 1; // LUON RESET SHOTOPT = 1
+                status = 0;
                 releaseRet = _releaseFn(_hCamera, XSDK_RELEASE_SHOOT_S1OFF, ref shotOpt, ref status);
-                Log(string.Format("[FUJI CAPTURE STEP 4d] Ket qua XSDK_RELEASE_SHOOT_S1OFF: Ret={0}, ShotOpt={1}, AfStatus={2}",
+                Log(string.Format("[FUJI CAPTURE STEP 3d] Ket qua XSDK_RELEASE_SHOOT_S1OFF: Ret={0}, ShotOpt={1}, AfStatus={2}",
                     releaseRet, shotOpt, status));
             }
 
@@ -555,10 +540,10 @@ namespace Lalestudio.FujifilmBridge
                 throw new Exception(fullErrMsg);
             }
 
-            Log("[FUJI CAPTURE STEP 4/6] [OK] Man trap da kich no thanh cong! Dang chuyen sang buoc nhan file anh...");
+            Log("[FUJI CAPTURE STEP 4/5] [OK] Man trap da kich no thanh cong! Dang chuyen sang buoc nhan file anh...");
 
             // Buoc 5: Lang nghe va keo file anh goc tu bo dem may anh
-            Log("[FUJI CAPTURE STEP 5/6] Dang lang nghe bo dem anh (polling XSDK_ReadImageInfo)...");
+            Log("[FUJI CAPTURE STEP 5/5] Dang lang nghe bo dem anh (polling XSDK_ReadImageInfo)...");
             DateTime startWait = DateTime.Now;
             XSDK_ImageInformation imgInfo = new XSDK_ImageInformation();
             int pollCount = 0;
@@ -575,14 +560,14 @@ namespace Lalestudio.FujifilmBridge
 
                     if (pollCount == 1 || pollCount % 15 == 0 || readInfoRet == XSDK_COMPLETE)
                     {
-                        Log(string.Format("[FUJI CAPTURE STEP 5/6] Dang doi anh... (lan {0}, {1:0.0}s, Ret={2}, Format=0x{3:X}, Size={4} bytes)",
+                        Log(string.Format("[FUJI CAPTURE STEP 5/5] Dang doi anh... (lan {0}, {1:0.0}s, Ret={2}, Format=0x{3:X}, Size={4} bytes)",
                             pollCount, (DateTime.Now - startWait).TotalSeconds, readInfoRet, imgInfo.lFormat, imgInfo.lDataSize));
                     }
 
                     if (readInfoRet == XSDK_COMPLETE && imgInfo.lDataSize > 1000 && (imgInfo.lFormat & 0xFF) != XSDK_IMAGEFORMAT_NONE)
                     {
                         double sizeMb = Math.Round((double)imgInfo.lDataSize / (1024 * 1024), 2);
-                        Log(string.Format("[FUJI CAPTURE STEP 6/6] [OK] DA PHAT HIEN ANH GOC! Format=0x{0:X}, Size={1} bytes ({2} MB), Kich thuoc pixel={3}x{4}",
+                        Log(string.Format("[FUJI CAPTURE STEP 5/5] [OK] DA PHAT HIEN ANH GOC! Format=0x{0:X}, Size={1} bytes ({2} MB), Kich thuoc pixel={3}x{4}",
                             imgInfo.lFormat, imgInfo.lDataSize, sizeMb, imgInfo.lImagePixWidth, imgInfo.lImagePixHeight));
 
                         byte[] buffer = new byte[imgInfo.lDataSize];
