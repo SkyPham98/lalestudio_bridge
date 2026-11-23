@@ -507,6 +507,20 @@ namespace Lalestudio.FujifilmBridge
                         Thread.Sleep(100);
                         continue;
                     }
+
+                    if (errCode == 0x1008 && tryS2 <= 3) // SHOOT_ERROR: Man trap co the dang bi khoa nua co tu truoc
+                    {
+                        Log(string.Format("[FUJI CAPTURE STEP 3/5] Man trap bi tu choi (0x1008 SHOOT_ERROR) o lan {0}, gui lenh CANCEL giai phong man trap va thu lai...", tryS2));
+                        int cOpt = 1, cSt = 0;
+                        try { _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref cOpt, ref cSt); } catch { }
+                        if (_releaseExFn != null)
+                        {
+                            try { _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref cOpt, ref cSt); } catch { }
+                        }
+                        Thread.Sleep(80);
+                        continue;
+                    }
+
                     break;
                 }
                 Log(string.Format("[FUJI CAPTURE STEP 3/5] Ket qua XSDK_Release (S2_S1OFF): Ret={0}, ShotOpt={1}, AfStatus={2}",
@@ -605,17 +619,6 @@ namespace Lalestudio.FujifilmBridge
                             Log(string.Format("[FUJI CAPTURE STEP 6/6] Dang doc {0} bytes du lieu anh qua cap USB (XSDK_ReadImage)...", imgInfo.lDataSize));
                             int readRet = _readImageFn(_hCamera, ptr, (uint)imgInfo.lDataSize);
                             Log(string.Format("[FUJI CAPTURE STEP 6/6] Ket qua XSDK_ReadImage: Ret={0} (0 = Thanh cong)", readRet));
-
-                            // XSDK_ReadImage hoan tat va giai phong bo dem truyen anh cua camera theo tieu chuan SDK
-                            if (_deleteImageFn != null)
-                            {
-                                try
-                                {
-                                    // Giai phong bo dem neu con du thua
-                                    _deleteImageFn(_hCamera);
-                                }
-                                catch { }
-                            }
 
                             if (readRet == XSDK_COMPLETE)
                             {
@@ -1047,6 +1050,11 @@ namespace Lalestudio.FujifilmBridge
                     catch (Exception ex)
                     {
                         FujiSdkNative.Log("[DAEMON CAPTURE LOI] " + ex.Message);
+                        if (ex.Message.Contains("0x1001") || ex.Message.Contains("0x1003") || ex.Message.Contains("INVALID_CAMERA"))
+                        {
+                            FujiSdkNative.Log("[DAEMON] Reset phien camera do loi giao tiep...");
+                            sdk.DisconnectCamera();
+                        }
                         SendJson(res, 500, string.Format("{{\"success\":false,\"error\":\"{0}\"}}", EscapeJson(ex.Message)));
                     }
                 }

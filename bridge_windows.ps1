@@ -154,6 +154,56 @@ function Test-PortListening {
     return $false
 }
 
+function Format-FujiDaemonError {
+    param ($errRecord, [string]$label = "Daemon 5514")
+    $msg = $errRecord.Exception.Message
+    if ($errRecord.ErrorDetails -and $errRecord.ErrorDetails.Message) {
+        try {
+            $parsed = $errRecord.ErrorDetails.Message | ConvertFrom-Json
+            if ($parsed.error) { $msg = $parsed.error }
+            else { $msg = $errRecord.ErrorDetails.Message }
+        } catch { $msg = $errRecord.ErrorDetails.Message }
+    } elseif ($errRecord.Exception.Response) {
+        try {
+            $sr = New-Object System.IO.StreamReader($errRecord.Exception.Response.GetResponseStream())
+            $body = $sr.ReadToEnd()
+            if ($body) {
+                try {
+                    $parsed = $body | ConvertFrom-Json
+                    if ($parsed.error) { $msg = $parsed.error }
+                    else { $msg = $body }
+                } catch { $msg = $body }
+            }
+        } catch {}
+    }
+    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua $label: $msg" -ForegroundColor Red
+
+    # In cac dong log moi nhat tu file fuji_bridge.log de hien thi truc tiep tren man hinh
+    if ($global:FujiBridgeExe) {
+        $logPath = Join-Path (Split-Path $global:FujiBridgeExe) "fuji_bridge.log"
+        if (Test-Path $logPath) {
+            Write-Host "------------------------------------------------------------" -ForegroundColor DarkCyan
+            Write-Host "[FUJI SDK LOG CHI TIET TU fuji_bridge.log]:" -ForegroundColor DarkCyan
+            Get-Content $logPath -Tail 25 | ForEach-Object {
+                $tLine = $_.Trim()
+                if ($tLine) {
+                    if ($tLine -like "*LOI*" -or $tLine -like "*ERROR*" -or $tLine -like "*FAIL*" -or $tLine -like "*TIMEOUT*") {
+                        Write-Host "  $tLine" -ForegroundColor Red
+                    } elseif ($tLine -like "*CANH BAO*" -or $tLine -like "*WARN*") {
+                        Write-Host "  $tLine" -ForegroundColor Yellow
+                    } elseif ($tLine -like "*THANH CONG*" -or $tLine -like "*PHAT HIEN*" -or $tLine -like "*SUCCESS*") {
+                        Write-Host "  $tLine" -ForegroundColor Green
+                    } else {
+                        Write-Host "  $tLine" -ForegroundColor Gray
+                    }
+                }
+            }
+            Write-Host "------------------------------------------------------------" -ForegroundColor DarkCyan
+        }
+    }
+    return $msg
+}
+
 # Ham khoi chay Fuji Daemon HTTP 5514 trong nen neu chua chay
 function Start-FujiDaemonIfNeeded {
     if (Test-PortListening -Port 5514 -TimeoutMs 150) {
@@ -755,22 +805,7 @@ while ($true) {
                                         Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon phan hoi: $fujiErrMsg" -ForegroundColor Yellow
                                     }
                                 } catch {
-                                    $fujiErrMsg = $_.Exception.Message
-                                    if ($_.Exception.Response) {
-                                        try {
-                                            $stream = $_.Exception.Response.GetResponseStream()
-                                            $reader = [System.IO.StreamReader]::new($stream)
-                                            $body = $reader.ReadToEnd()
-                                            if ($body) {
-                                                try {
-                                                    $parsed = $body | ConvertFrom-Json
-                                                    if ($parsed.error) { $fujiErrMsg = $parsed.error }
-                                                    else { $fujiErrMsg = $body }
-                                                } catch { $fujiErrMsg = $body }
-                                            }
-                                        } catch {}
-                                    }
-                                    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg)." -ForegroundColor Yellow
+                                    $fujiErrMsg = Format-FujiDaemonError -errRecord $_ -label "Daemon 5514"
                                 }
                             } else {
                                 Write-Host "[FUJI BRIDGE STEP 2] Daemon 5514 chua khoi chay, dang khoi dong..." -ForegroundColor Yellow
@@ -784,22 +819,7 @@ while ($true) {
                                             Write-Host "[FUJI BRIDGE STEP 3/4] Daemon chup thanh cong! File: $($fujiRes.filename) ($($fujiRes.fileSizeMb))" -ForegroundColor Green
                                         }
                                     } catch {
-                                        $fujiErrMsg = $_.Exception.Message
-                                        if ($_.Exception.Response) {
-                                            try {
-                                                $stream = $_.Exception.Response.GetResponseStream()
-                                                $reader = [System.IO.StreamReader]::new($stream)
-                                                $body = $reader.ReadToEnd()
-                                                if ($body) {
-                                                    try {
-                                                        $parsed = $body | ConvertFrom-Json
-                                                        if ($parsed.error) { $fujiErrMsg = $parsed.error }
-                                                        else { $fujiErrMsg = $body }
-                                                    } catch { $fujiErrMsg = $body }
-                                                }
-                                            } catch {}
-                                        }
-                                        Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon loi: $fujiErrMsg" -ForegroundColor Yellow
+                                        $fujiErrMsg = Format-FujiDaemonError -errRecord $_ -label "Daemon 5514 (khoi dong lai)"
                                     }
                                 }
                             }
