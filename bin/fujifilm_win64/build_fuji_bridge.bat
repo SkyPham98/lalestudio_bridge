@@ -25,7 +25,7 @@ if "%CSC_PATH%"=="" (
 echo [INFO] Dang su dung trinh bien dich: %CSC_PATH%
 echo [INFO] Dang bien dich FujiBridge.cs -> fuji_bridge.exe (x64)...
 
-"%CSC_PATH%" /target:exe /platform:x64 /optimize+ /r:System.Drawing.dll /out:fuji_bridge.exe FujiBridge.cs
+"%CSC_PATH%" /target:exe /platform:x64 /optimize+ /out:fuji_bridge.exe FujiBridge.cs
 
 if %errorlevel% equ 0 (
     echo.

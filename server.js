@@ -149,7 +149,7 @@ function findCameraControlRemoteCmd() {
         return candidate;
       }
     }
-  } catch (e) {}
+  } catch (e) { }
 
   // 2. Dò tìm trong các thư mục cài đặt tiêu chuẩn
   const candidates = [];
@@ -173,7 +173,7 @@ function findCameraControlRemoteCmd() {
         cachedRemoteCmdPath = p;
         return p;
       }
-    } catch (e) {}
+    } catch (e) { }
   }
   return null;
 }
@@ -196,7 +196,7 @@ function getCandidateDccUrls() {
   list.push('http://localhost:5513');
   if (cachedWorkingDccUrl) list.push(cachedWorkingDccUrl.replace(/\/$/, ''));
   if (config.digicamcontrol?.url) list.push(config.digicamcontrol.url.replace(/\/$/, ''));
-  
+
   try {
     const ifaces = os.networkInterfaces();
     for (const name of Object.keys(ifaces)) {
@@ -206,7 +206,7 @@ function getCandidateDccUrls() {
         }
       }
     }
-  } catch (e) {}
+  } catch (e) { }
 
   return Array.from(new Set(list));
 }
@@ -336,7 +336,7 @@ function getFujiBridgeExe() {
         needsRecompile = true;
         console.log(`[Bridge] ⚙️ Phát hiện FujiBridge.cs mới hơn fuji_bridge.exe cũ, tiến hành biên dịch lại...`);
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   if (!needsRecompile && fs.existsSync(defaultExe)) {
@@ -355,7 +355,7 @@ function getFujiBridgeExe() {
         try {
           console.log(`[Bridge] ⚙️ Đang tự động biên dịch fuji_bridge.exe bằng ${csc}...`);
           require('child_process').execSync(
-            `"${csc}" /target:exe /platform:x64 /optimize+ /r:System.Drawing.dll /out:"${defaultExe}" "${csSource}"`,
+            `"${csc}" /target:exe /platform:x64 /optimize+ /out:"${defaultExe}" "${csSource}"`,
             { cwd: path.dirname(defaultExe), timeout: 15000, stdio: ['pipe', 'pipe', 'ignore'] }
           );
           if (fs.existsSync(defaultExe)) {
@@ -396,7 +396,7 @@ async function checkFujifilmStatus() {
         serverUrl: daemonUrl
       };
     }
-  } catch (e) {}
+  } catch (e) { }
 
   // 2. Thử CLI fuji_bridge.exe status
   const fujiExe = getFujiBridgeExe();
@@ -417,7 +417,7 @@ async function checkFujifilmStatus() {
         method: 'cli',
         serverUrl: 'CLI (' + path.basename(fujiExe) + ')'
       };
-    } catch (cliErr) {}
+    } catch (cliErr) { }
   }
 
   return { online: false, cameraConnected: false, cameraName: null, error: 'Fujifilm bridge offline' };
@@ -535,7 +535,7 @@ async function triggerFujiFocus() {
       const data = await res.json();
       return { success: true, message: data.message || 'Đã kích hoạt autofocus Fujifilm', method: 'daemon' };
     }
-  } catch (e) {}
+  } catch (e) { }
 
   const fujiExe = getFujiBridgeExe();
   if (fujiExe) {
@@ -694,7 +694,7 @@ setInterval(monitorAndAutoReconnectCamera, 2500);
  */
 app.get('/api/status', async (req, res) => {
   const activeStatus = await getActiveCameraStatus();
-  
+
   // Auto-configure session if digiCamControl is active
   if (activeStatus.driver === 'digicamcontrol' && activeStatus.online && !dccSessionConfigured) {
     await configureDigiCamControlSession();
@@ -744,7 +744,7 @@ app.get('/api/liveview/start', async (req, res) => {
     setTimeout(async () => {
       try {
         await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
-      } catch (e) {}
+      } catch (e) { }
     }, 400);
     res.json({ success: true, message: 'Đã gửi lệnh bật Live View & đánh thức cảm biến (Focus)' });
   } catch (err) {
@@ -825,7 +825,7 @@ app.all('/api/focus', async (req, res) => {
             methodUsed = `HTTP (${url})`;
             break;
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     }
 
@@ -918,7 +918,7 @@ function triggerAutoLiveViewStart(dccUrl) {
     fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) })
       .then(() => new Promise(r => setTimeout(r, 400)))
       .then(() => fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) }))
-      .catch(() => {});
+      .catch(() => { });
   }
 }
 
@@ -970,13 +970,13 @@ function triggerViaRemoteCmd(noAf = false) {
 async function triggerViaHttp(dccUrl, noAf = false) {
   const endpoints = noAf
     ? [
-        `${dccUrl}/?CMD=Capture_No_Af`,
-        `${dccUrl}/?slc=CaptureNoAf&param1=&param2=`
-      ]
+      `${dccUrl}/?CMD=Capture_No_Af`,
+      `${dccUrl}/?slc=CaptureNoAf&param1=&param2=`
+    ]
     : [
-        `${dccUrl}/?CMD=Capture`,
-        `${dccUrl}/?slc=capture&param1=&param2=`
-      ];
+      `${dccUrl}/?CMD=Capture`,
+      `${dccUrl}/?slc=capture&param1=&param2=`
+    ];
 
   for (const url of endpoints) {
     try {
@@ -1124,7 +1124,7 @@ app.post('/api/capture', async (req, res) => {
       if (lastRes.ok) {
         prevLastCaptured = (await lastRes.text()).trim();
       }
-    } catch (e) {}
+    } catch (e) { }
 
     // Also get current session folder from digiCamControl dynamically
     try {
@@ -1137,7 +1137,7 @@ app.post('/api/capture', async (req, res) => {
           console.log(`[Bridge] Dynamically watching active digiCamControl session folder: ${sessFolder}`);
         }
       }
-    } catch (e) {}
+    } catch (e) { }
 
     console.log(`[Bridge] Sending Shutter Release command to digiCamControl at ${dccUrl} (Mode: ${liveViewSource})...`);
 
@@ -1169,7 +1169,7 @@ app.post('/api/capture', async (req, res) => {
               }
             }
           }
-        } catch (e) {}
+        } catch (e) { }
         pollTimer = setTimeout(checkPoll, 200);
       };
       pollTimer = setTimeout(checkPoll, 200);
@@ -1186,9 +1186,9 @@ app.post('/api/capture', async (req, res) => {
       try {
         console.log('[Bridge] 🎯 Đang tự động lấy nét (Pre-focus Dual Pixel AF) cho Canon R50 trước khi chụp...');
         if (remoteCmdExe) {
-          execFile(remoteCmdExe, ['/c', 'LiveView_Focus'], { timeout: 1500 }, () => {});
+          execFile(remoteCmdExe, ['/c', 'LiveView_Focus'], { timeout: 1500 }, () => { });
         } else {
-          fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(1000) }).catch(() => {});
+          fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(1000) }).catch(() => { });
         }
         // Chờ 250ms cho cảm biến Dual Pixel AF của Canon R50 khóa nét vào mắt/khuôn mặt
         await new Promise(r => setTimeout(r, 250));
@@ -1258,14 +1258,14 @@ app.post('/api/capture', async (req, res) => {
         if (prevRes.ok) {
           const arrayBuffer = await prevRes.arrayBuffer();
           const base64 = `data:image/jpeg;base64,${Buffer.from(arrayBuffer).toString('base64')}`;
-          
+
           if (liveViewSource === 'usb') {
             setTimeout(async () => {
               try {
                 await fetch(`${dccUrl}/?CMD=LiveViewWnd_Show`, { signal: AbortSignal.timeout(3000) });
                 await new Promise(r => setTimeout(r, 400));
                 await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
-              } catch (e) {}
+              } catch (e) { }
             }, 300);
           }
 
@@ -1303,7 +1303,7 @@ app.post('/api/capture', async (req, res) => {
             await new Promise(r => setTimeout(r, 400));
             await fetch(`${dccUrl}/?CMD=LiveView_Focus`, { signal: AbortSignal.timeout(2000) });
             console.log('[Bridge] USB Live View resumed after capture.');
-          } catch (e) {}
+          } catch (e) { }
         }, 300);
       }
 
