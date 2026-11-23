@@ -176,7 +176,7 @@ function Format-FujiDaemonError {
             }
         } catch {}
     }
-    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua $label: $msg" -ForegroundColor Red
+    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua $($label): $msg" -ForegroundColor Red
 
     # In cac dong log moi nhat tu file fuji_bridge.log de hien thi truc tiep tren man hinh
     if ($global:FujiBridgeExe) {
