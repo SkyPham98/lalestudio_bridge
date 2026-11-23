@@ -683,8 +683,13 @@ while ($true) {
                             } catch {}
                         }
 
-                        # Kiem tra may anh hien tai (FUJIFILM hoac CANON)
-                        $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
+                        # Kiem tra may anh hien tai (Neu da xac dinh Fujifilm truoc do, bo qua do tim lai de chup ngay tuc thi)
+                        $camInfo = $null
+                        if ($global:ActiveCameraDriver -eq "fujifilm") {
+                            $camInfo = @{ driver = "fujifilm"; connected = $true; cameraName = "FUJIFILM X-T4" }
+                        } else {
+                            $camInfo = Get-ActiveCameraInfo -ManualDccUrl $DccUrl
+                        }
 
                         # A. XU LY CHUP ANH BANG FUJIFILM (26.1 MP)
                         if ($camInfo.driver -eq "fujifilm") {

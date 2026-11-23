@@ -309,17 +309,17 @@ namespace Lalestudio.FujifilmBridge
                     devInfo.strProduct, devInfo.strSerialNo, devInfo.strFirmware, infoRet));
             }
 
-            // Thiet lap quyen dieu khien PC (XSDK_PRIORITY_PC = 2) de camera cho phep PC nha man trap
+            // Thiet lap quyen dieu khien PC (XSDK_PRIORITY_PC = 2)
             if (_setPriorityModeFn != null)
             {
-                EnsurePriorityMode(XSDK_PRIORITY_PC, 3000);
+                EnsurePriorityMode(XSDK_PRIORITY_PC);
             }
 
             Log("[CONNECT THANH CONG] May anh Fujifilm da ket noi va san sang hoat dong!");
             return true;
         }
 
-        private bool EnsurePriorityMode(int targetMode, int timeoutMs = 3000)
+        private bool EnsurePriorityMode(int targetMode)
         {
             if (_setPriorityModeFn == null || _hCamera == IntPtr.Zero) return false;
 
@@ -334,33 +334,26 @@ namespace Lalestudio.FujifilmBridge
                 }
             }
 
-            DateTime deadline = DateTime.Now.AddMilliseconds(timeoutMs);
-            int lastRet = -1;
-            int lastErr = 0;
-            int apiCode = 0;
-            int attempt = 0;
-
-            while (DateTime.Now < deadline)
+            int lastRet = _setPriorityModeFn(_hCamera, targetMode);
+            if (lastRet == XSDK_COMPLETE)
             {
-                attempt++;
-                lastRet = _setPriorityModeFn(_hCamera, targetMode);
-                if (lastRet == XSDK_COMPLETE)
-                {
-                    Log(string.Format("[PRIORITY] Thiet lap thanh cong quyen dieu khien PC (Ret=0, sau {0} lan thu)", attempt));
-                    return true;
-                }
-
-                if (_getErrorNumberFn != null)
-                {
-                    _getErrorNumberFn(_hCamera, ref apiCode, ref lastErr);
-                }
-
-                // Neu camera dang ban (0x1006 BUSY hoac 0x1016), nghi 60ms va thu lai
-                Thread.Sleep(60);
+                Log("[PRIORITY] Thiet lap thanh cong quyen dieu khien PC (Ret=0)");
+                return true;
             }
 
-            Log(string.Format("[PRIORITY CANH BAO] SetPriorityMode khong thanh cong sau {0}ms ({1} lan thu): Ret={2}, ErrCode=0x{3:X} ({4})",
-                timeoutMs, attempt, lastRet, lastErr, DecodeErrorCode(lastErr)));
+            // Neu chua thanh cong, thu them 1 lan nua sau 10ms (khong loop blocking)
+            Thread.Sleep(10);
+            lastRet = _setPriorityModeFn(_hCamera, targetMode);
+            if (lastRet == XSDK_COMPLETE)
+            {
+                Log("[PRIORITY] Thiet lap thanh cong quyen dieu khien PC lan 2 (Ret=0)");
+                return true;
+            }
+
+            int apiCode = 0, lastErr = 0;
+            if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref apiCode, ref lastErr);
+            Log(string.Format("[PRIORITY] Ghi chu: SetPriorityMode Ret={0}, ErrCode=0x{1:X} (Bo qua de ban man trap ngay lap tuc)",
+                lastRet, lastErr));
             return false;
         }
 
@@ -455,12 +448,11 @@ namespace Lalestudio.FujifilmBridge
                 Log(string.Format("[FUJI CAPTURE STEP 1/6] Trang thai chi tiet truoc khi chup: 0x{0:X} ({1})", details, DecodeErrorDetails(details)));
             }
 
-            // Dam bao may anh o quyen dieu khien PC
+            // Dam bao may anh o quyen dieu khien PC (Kiem tra tuc thi 0ms)
             if (_setPriorityModeFn != null)
             {
-                bool prioOk = EnsurePriorityMode(XSDK_PRIORITY_PC, 2500);
-                Log(string.Format("[FUJI CAPTURE STEP 2/6] Dam bao quyen PC (XSDK_SetPriorityMode -> XSDK_PRIORITY_PC): {0}",
-                    prioOk ? "THANH CONG (Ret=0)" : "CANH BAO (Chua the dat quyen PC)"));
+                EnsurePriorityMode(XSDK_PRIORITY_PC);
+                Log("[FUJI CAPTURE STEP 2/6] Kiem tra quyen PC hoan tat");
             }
 
             int shotOpt = 1;
@@ -472,31 +464,16 @@ namespace Lalestudio.FujifilmBridge
                 Log("[FUJI CAPTURE STEP 3/6] Kich hoat lay net S1ON (Pre-focus)...");
                 try
                 {
-                    int s1Ret = -1;
-                    for (int tryS1 = 1; tryS1 <= 3; tryS1++)
-                    {
-                        s1Ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
-                        if (s1Ret == XSDK_COMPLETE) break;
-
-                        int apiCode = 0, errCode = 0;
-                        if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref apiCode, ref errCode);
-                        if (errCode == 0x1006 || errCode == 0x1016) // BUSY
-                        {
-                            Thread.Sleep(80);
-                            continue;
-                        }
-                        break;
-                    }
-
+                    int s1Ret = _releaseFn(_hCamera, XSDK_RELEASE_S1ON, ref shotOpt, ref status);
                     string afNote = (status == 1 || status == 5) ? "[OK: Da khoa net]" : (status == 4 ? "[OK: Tieu cu co dinh]" : (status == 2 ? "[Chua kiem tra]" : "[Trang thai: " + status + "]"));
                     Log(string.Format("[FUJI CAPTURE STEP 3/6] Ket qua S1ON: Ret={0}, ShotOpt={1}, AfStatus={2} {3}", s1Ret, shotOpt, status, afNote));
                     if (s1Ret != XSDK_COMPLETE)
                     {
-                        // Neu S1ON that bai, huy nua co de may anh khong bi ket trang thai AF
+                        // Neu S1ON khong thanh cong (VD dang o Manual Focus), huy nua co de tranh treo
                         int cancelOpt = 1, cancelStatus = 0;
                         _releaseFn(_hCamera, XSDK_RELEASE_N_S1OFF, ref cancelOpt, ref cancelStatus);
                     }
-                    Thread.Sleep(80);
+                    Thread.Sleep(20);
                 }
                 catch (Exception exAf)
                 {

@@ -1059,8 +1059,19 @@ app.post('/api/capture', async (req, res) => {
       });
     }
 
-    // 2. CHECK ACTIVE CAMERA DRIVER (Auto-detect Canon EOS R50 vs FUJIFILM X-T4)
-    const activeCamera = await getActiveCameraStatus();
+    // 2. CHECK ACTIVE CAMERA DRIVER (Ưu tiên dùng driver đã nhận diện sẵn để bắn màn trập ngay tức thì <50ms)
+    let activeCamera = null;
+    if (isCameraConnected && lastKnownCameraName) {
+      const isFuji = lastKnownCameraName.toUpperCase().includes('FUJIFILM') || (config.mode || '').toLowerCase() === 'fujifilm';
+      activeCamera = {
+        driver: isFuji ? 'fujifilm' : 'digicamcontrol',
+        online: true,
+        cameraConnected: true,
+        cameraName: lastKnownCameraName
+      };
+    } else {
+      activeCamera = await getActiveCameraStatus();
+    }
 
     // 2A. FUJIFILM INTEGRATION (26.1 MP X-Trans CMOS 4)
     if (activeCamera.driver === 'fujifilm') {
