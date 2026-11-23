@@ -213,7 +213,8 @@ function Find-FujifilmCamera {
         } catch {}
     }
 
-    if ($global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+    # Chi goi CLI status neu Daemon 5514 KHONG hoat dong de tranh xung dot phien USB
+    if (-not (Test-PortListening -Port 5514 -TimeoutMs 100) -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
         try {
             $pinfo = New-Object System.Diagnostics.ProcessStartInfo
             $pinfo.FileName = $global:FujiBridgeExe
@@ -647,7 +648,8 @@ while ($true) {
                                 Write-Host "[FUJI FOCUS] Daemon focus that bai: $($_.Exception.Message)" -ForegroundColor Yellow
                             }
 
-                            if (-not $focused -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+                            # Chi goi CLI focus neu Daemon 5514 KHONG hoat dong de tranh xung dot USB
+                            if (-not $focused -and -not (Test-PortListening -Port 5514 -TimeoutMs 100) -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
                                 try {
                                     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
                                     $pinfo.FileName = $global:FujiBridgeExe
@@ -754,7 +756,21 @@ while ($true) {
                                     }
                                 } catch {
                                     $fujiErrMsg = $_.Exception.Message
-                                    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg). Chuyen sang goi truc tiep CLI..." -ForegroundColor Yellow
+                                    if ($_.Exception.Response) {
+                                        try {
+                                            $stream = $_.Exception.Response.GetResponseStream()
+                                            $reader = [System.IO.StreamReader]::new($stream)
+                                            $body = $reader.ReadToEnd()
+                                            if ($body) {
+                                                try {
+                                                    $parsed = $body | ConvertFrom-Json
+                                                    if ($parsed.error) { $fujiErrMsg = $parsed.error }
+                                                    else { $fujiErrMsg = $body }
+                                                } catch { $fujiErrMsg = $body }
+                                            }
+                                        } catch {}
+                                    }
+                                    Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg)." -ForegroundColor Yellow
                                 }
                             } else {
                                 Write-Host "[FUJI BRIDGE STEP 2] Daemon 5514 chua khoi chay, dang khoi dong..." -ForegroundColor Yellow
@@ -769,14 +785,28 @@ while ($true) {
                                         }
                                     } catch {
                                         $fujiErrMsg = $_.Exception.Message
+                                        if ($_.Exception.Response) {
+                                            try {
+                                                $stream = $_.Exception.Response.GetResponseStream()
+                                                $reader = [System.IO.StreamReader]::new($stream)
+                                                $body = $reader.ReadToEnd()
+                                                if ($body) {
+                                                    try {
+                                                        $parsed = $body | ConvertFrom-Json
+                                                        if ($parsed.error) { $fujiErrMsg = $parsed.error }
+                                                        else { $fujiErrMsg = $body }
+                                                    } catch { $fujiErrMsg = $body }
+                                                }
+                                            } catch {}
+                                        }
                                         Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon loi: $fujiErrMsg" -ForegroundColor Yellow
                                     }
                                 }
                             }
 
-                            # 2. Neu Daemon chua chay hoac loi, goi truc tiep qua CLI fuji_bridge.exe
+                            # 2. Chi khi Daemon HOAN TOAN KHONG HOAT DONG moi goi truc tiep qua CLI fuji_bridge.exe
                             $fujiRawJson = $null
-                            if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+                            if (-not $fujiCaptured -and -not (Test-PortListening -Port 5514 -TimeoutMs 100) -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
                                 if (-not (Test-PortListening -Port 5514 -TimeoutMs 100)) {
                                     $dangling = Get-Process -Name "fuji_bridge" -ErrorAction SilentlyContinue
                                     if ($dangling) {

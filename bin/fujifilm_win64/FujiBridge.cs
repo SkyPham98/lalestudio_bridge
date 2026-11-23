@@ -137,16 +137,6 @@ namespace Lalestudio.FujifilmBridge
 
         public bool IsAlive()
         {
-            if (_hCamera == IntPtr.Zero) return false;
-            if (_getDeviceInfoFn != null)
-            {
-                XSDK_DeviceInformation devInfo = new XSDK_DeviceInformation();
-                int ret = _getDeviceInfoFn(_hCamera, ref devInfo);
-                if (ret == XSDK_COMPLETE) return true;
-                Log(string.Format("[IS_ALIVE] May anh ngat ket noi hoac loi (ret={0}), tien hanh dong phien...", ret));
-                DisconnectCamera();
-                return false;
-            }
             return _hCamera != IntPtr.Zero;
         }
 
@@ -154,6 +144,13 @@ namespace Lalestudio.FujifilmBridge
         {
             string line = string.Format("[{0:HH:mm:ss.fff}] {1}", DateTime.Now, msg);
             Console.Error.WriteLine(line);
+            try
+            {
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string logFile = Path.Combine(baseDir, "fuji_bridge.log");
+                File.AppendAllText(logFile, line + Environment.NewLine);
+            }
+            catch { }
         }
 
         public static string DecodeErrorCode(int errCode)
@@ -373,15 +370,6 @@ namespace Lalestudio.FujifilmBridge
         {
             if (_hCamera != IntPtr.Zero)
             {
-                try
-                {
-                    int opt = 1, st = 0;
-                    if (_releaseFn != null) _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref opt, ref st);
-                    if (_releaseExFn != null) _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref opt, ref st);
-                    if (_setPriorityModeFn != null) _setPriorityModeFn(_hCamera, XSDK_PRIORITY_CAMERA);
-                }
-                catch { }
-
                 if (_closeFn != null)
                 {
                     Log(string.Format("[DISCONNECT] Dong phien may anh Fujifilm Handle=0x{0:X}...", _hCamera.ToInt64()));
@@ -472,13 +460,9 @@ namespace Lalestudio.FujifilmBridge
                 Log(string.Format("[FUJI CAPTURE STEP 1/6] Trang thai chi tiet truoc khi chup: 0x{0:X} ({1})", details, DecodeErrorDetails(details)));
             }
 
-            // [PRE-SHOOT CLEANUP] Dam bao khong con lenh release ton dong hoac anh ton trong bo dem tu lan chup truoc
+            // [PRE-SHOOT CLEANUP] Dam bao bo dem truyen anh khong co file ton dong
             try
             {
-                int preOpt = 1, preSt = 0;
-                if (_releaseFn != null) _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref preOpt, ref preSt);
-                if (_releaseExFn != null) _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref preOpt, ref preSt);
-
                 if (_readImageInfoFn != null)
                 {
                     XSDK_ImageInformation oldInfo = new XSDK_ImageInformation();
@@ -508,7 +492,7 @@ namespace Lalestudio.FujifilmBridge
             // Cach 1: XSDK_Release (S2_S1OFF - Chuan tieu chuan cua Fujifilm SDK)
             if (_releaseFn != null)
             {
-                for (int tryS2 = 1; tryS2 <= 3; tryS2++)
+                for (int tryS2 = 1; tryS2 <= 15; tryS2++)
                 {
                     shotOpt = 1; // LUON RESET SHOTOPT = 1 TRUOC KHI GOI (tranh loi 0x1008 do shotOpt=0)
                     status = 0;
@@ -517,10 +501,10 @@ namespace Lalestudio.FujifilmBridge
 
                     int apiCode = 0, errCode = 0;
                     if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref apiCode, ref errCode);
-                    if (errCode == 0x1006 || errCode == 0x1016) // BUSY
+                    if (errCode == 0x1006 || errCode == 0x1016 || errCode == 0x100E) // BUSY (dang ghi the nho hoac xu ly bo dem)
                     {
-                        Log(string.Format("[FUJI CAPTURE STEP 3/5] Camera dang ban (BUSY 0x{0:X}) o lan {1}, doi 80ms...", errCode, tryS2));
-                        Thread.Sleep(80);
+                        Log(string.Format("[FUJI CAPTURE STEP 3/5] Camera dang ban (BUSY 0x{0:X}) o lan {1}/15, doi 100ms...", errCode, tryS2));
+                        Thread.Sleep(100);
                         continue;
                     }
                     break;
@@ -622,39 +606,15 @@ namespace Lalestudio.FujifilmBridge
                             int readRet = _readImageFn(_hCamera, ptr, (uint)imgInfo.lDataSize);
                             Log(string.Format("[FUJI CAPTURE STEP 6/6] Ket qua XSDK_ReadImage: Ret={0} (0 = Thanh cong)", readRet));
 
-                            // 1. Xoa anh khoi bo dem truyen du lieu USB cua may anh
+                            // XSDK_ReadImage hoan tat va giai phong bo dem truyen anh cua camera theo tieu chuan SDK
                             if (_deleteImageFn != null)
                             {
-                                try { _deleteImageFn(_hCamera); } catch { }
-                            }
-
-                            // 2. Gui lenh XSDK_RELEASE_CANCEL de giai phong trang thai man trap (tranh loi 0x1008 o tam tiep theo)
-                            int cancelOpt = 1, cancelStatus = 0;
-                            if (_releaseFn != null)
-                            {
-                                try { _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref cancelOpt, ref cancelStatus); } catch { }
-                            }
-                            if (_releaseExFn != null)
-                            {
-                                try { _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref cancelOpt, ref cancelStatus); } catch { }
-                            }
-
-                            // 3. Dong bo bo dem the nho may anh (chuan theo Fujifilm SDK CameraControl.cpp: TerminateS2)
-                            // SetPriorityMode ve CAMERA cho den khi may anh ghi the xong
-                            Log("[FUJI CAPTURE STEP 6/6] Dong bo bo dem the nho may anh (SetPriorityMode -> CAMERA)...");
-                            if (_setPriorityModeFn != null)
-                            {
-                                DateTime startWaitBuf = DateTime.Now;
-                                while ((DateTime.Now - startWaitBuf).TotalMilliseconds < 2500)
+                                try
                                 {
-                                    int pRet = _setPriorityModeFn(_hCamera, XSDK_PRIORITY_CAMERA);
-                                    if (pRet == XSDK_COMPLETE)
-                                    {
-                                        Log(string.Format("[FUJI CAPTURE STEP 6/6] Bo dem may anh da san sang ({0:0}ms)", (DateTime.Now - startWaitBuf).TotalMilliseconds));
-                                        break;
-                                    }
-                                    Thread.Sleep(30);
+                                    // Giai phong bo dem neu con du thua
+                                    _deleteImageFn(_hCamera);
                                 }
+                                catch { }
                             }
 
                             if (readRet == XSDK_COMPLETE)
@@ -966,7 +926,7 @@ namespace Lalestudio.FujifilmBridge
                 lock (sdk)
                 {
                     XSDK_DeviceInformation devInfo = new XSDK_DeviceInformation();
-                    bool connected = sdk.IsAlive();
+                    bool connected = sdk.IsConnected;
                     if (!connected)
                     {
                         connected = sdk.ConnectCamera(out devInfo);
@@ -994,6 +954,24 @@ namespace Lalestudio.FujifilmBridge
                     string json = string.Format("{{\"success\":{0},\"message\":\"{1}\"}}",
                         ok ? "true" : "false",
                         ok ? "Da kich hoat lay net tu dong Fujifilm" : EscapeJson(sdk.LastError ?? "Lay net that bai"));
+                    SendJson(res, ok ? 200 : 500, json);
+                }
+                return;
+            }
+
+            // 2b. ALL /api/reconnect or /reconnect (Ket noi lai may anh trong Daemon)
+            if (rawUrl.StartsWith("/api/reconnect") || rawUrl == "/reconnect")
+            {
+                lock (sdk)
+                {
+                    FujiSdkNative.Log("[DAEMON] Nhan yeu cau ket noi lai camera...");
+                    sdk.DisconnectCamera();
+                    Thread.Sleep(300);
+                    XSDK_DeviceInformation devInfo;
+                    bool ok = sdk.ConnectCamera(out devInfo);
+                    string json = string.Format("{{\"success\":{0},\"connected\":{0},\"message\":\"{1}\"}}",
+                        ok ? "true" : "false",
+                        ok ? "Ket noi lai may anh thanh cong" : EscapeJson(sdk.LastError ?? "Ket noi lai that bai"));
                     SendJson(res, ok ? 200 : 500, json);
                 }
                 return;
@@ -1030,7 +1008,7 @@ namespace Lalestudio.FujifilmBridge
                         try { Directory.CreateDirectory(saveDir); } catch { }
                     }
 
-                    if (!sdk.IsAlive())
+                    if (!sdk.IsConnected)
                     {
                         XSDK_DeviceInformation devInfo;
                         if (!sdk.ConnectCamera(out devInfo))
