@@ -5,6 +5,9 @@ using System.Threading;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
 
 namespace Lalestudio.FujifilmBridge
 {
@@ -814,9 +817,11 @@ namespace Lalestudio.FujifilmBridge
                 string fullPath = Path.Combine(saveDir, filename);
 
                 File.WriteAllBytes(fullPath, photoBytes);
-                FujiSdkNative.Log(string.Format("[CLI CAPTURE] Da luu file anh thanh cong: {0}", fullPath));
+                FujiSdkNative.Log(string.Format("[CLI CAPTURE] Da luu file anh goc chat luong cao thanh cong: {0}", fullPath));
 
-                string base64 = "data:image/jpeg;base64," + Convert.ToBase64String(photoBytes);
+                // Luu nguyen ven 100% file goc 6240x4160 tren o cung cho in an & download
+                // Tao ban nhe Base64 (max 1600px, ~150KB) de truyen sieu toc len web kiosk
+                string base64 = CreatePreviewBase64(photoBytes, 1600, 80);
                 double sizeMb = Math.Round((double)photoBytes.Length / (1024 * 1024), 2);
                 long elapsedMs = Environment.TickCount - startTime;
 
@@ -1006,9 +1011,11 @@ namespace Lalestudio.FujifilmBridge
                         string fullPath = Path.Combine(saveDir, filename);
 
                         File.WriteAllBytes(fullPath, photoBytes);
-                        FujiSdkNative.Log(string.Format("[DAEMON CAPTURE] Da luu file anh thanh cong: {0}", fullPath));
+                        FujiSdkNative.Log(string.Format("[DAEMON CAPTURE] Da luu file anh goc chat luong cao thanh cong: {0}", fullPath));
 
-                        string base64 = "data:image/jpeg;base64," + Convert.ToBase64String(photoBytes);
+                        // Luu nguyen ven 100% file goc 6240x4160 tren o cung cho in an & download
+                        // Tao ban nhe Base64 (max 1600px, ~150KB) de truyen sieu toc len web kiosk
+                        string base64 = CreatePreviewBase64(photoBytes, 1600, 80);
                         double sizeMb = Math.Round((double)photoBytes.Length / (1024 * 1024), 2);
                         long elapsedMs = Environment.TickCount - startTime;
 
@@ -1069,6 +1076,82 @@ namespace Lalestudio.FujifilmBridge
         {
             if (string.IsNullOrEmpty(s)) return "";
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", " ");
+        }
+
+        /// <summary>
+        /// Tao chuoi Base64 anh preview toi uu (<180 KB, max 1600px) tu du lieu anh goc JPEG 10MB
+        /// Giup tiet kiem 98% dung luong truyen tai, giup trinh duyet Web Kiosk hien preview ngay lap tuc
+        /// File goc chat luong cao nhat (6240x4160) van duoc luu nguyen ven tren o dia phuc vu in an & tai ve
+        /// </summary>
+        static string CreatePreviewBase64(byte[] fullBytes, int maxDimension = 1600, long quality = 80L)
+        {
+            if (fullBytes == null || fullBytes.Length == 0) return "";
+            try
+            {
+                using (MemoryStream msIn = new MemoryStream(fullBytes))
+                using (Image orig = Image.FromStream(msIn, false, false))
+                {
+                    int w = orig.Width;
+                    int h = orig.Height;
+                    if (w <= maxDimension && h <= maxDimension)
+                    {
+                        return "data:image/jpeg;base64," + Convert.ToBase64String(fullBytes);
+                    }
+
+                    int newW = w;
+                    int newH = h;
+                    if (w > h)
+                    {
+                        newW = maxDimension;
+                        newH = (int)Math.Round((double)h * maxDimension / w);
+                    }
+                    else
+                    {
+                        newH = maxDimension;
+                        newW = (int)Math.Round((double)w * maxDimension / h);
+                    }
+
+                    using (Bitmap bmp = new Bitmap(newW, newH))
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                        g.SmoothingMode = SmoothingMode.HighSpeed;
+                        g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+                        g.CompositingQuality = CompositingQuality.HighSpeed;
+                        g.DrawImage(orig, 0, 0, newW, newH);
+
+                        using (MemoryStream msOut = new MemoryStream())
+                        {
+                            ImageCodecInfo encoder = null;
+                            foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders())
+                            {
+                                if (c.MimeType == "image/jpeg") { encoder = c; break; }
+                            }
+
+                            if (encoder != null)
+                            {
+                                EncoderParameters encParams = new EncoderParameters(1);
+                                encParams.Param[0] = new EncoderParameter(Encoder.Quality, quality);
+                                bmp.Save(msOut, encoder, encParams);
+                            }
+                            else
+                            {
+                                bmp.Save(msOut, ImageFormat.Jpeg);
+                            }
+
+                            byte[] thumbBytes = msOut.ToArray();
+                            FujiSdkNative.Log(string.Format("[PREVIEW OPTIMIZE] Da tao anh preview sieu nhe: {0:0.0} KB (goc {1:0.0} MB)",
+                                (double)thumbBytes.Length / 1024, (double)fullBytes.Length / (1024 * 1024)));
+                            return "data:image/jpeg;base64," + Convert.ToBase64String(thumbBytes);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FujiSdkNative.Log("[PREVIEW OPTIMIZE FALLBACK] " + ex.Message);
+                return "data:image/jpeg;base64," + Convert.ToBase64String(fullBytes);
+            }
         }
 
         static void PrintHelp()

@@ -355,7 +355,7 @@ function getFujiBridgeExe() {
         try {
           console.log(`[Bridge] ⚙️ Đang tự động biên dịch fuji_bridge.exe bằng ${csc}...`);
           require('child_process').execSync(
-            `"${csc}" /target:exe /platform:x64 /optimize+ /out:"${defaultExe}" "${csSource}"`,
+            `"${csc}" /target:exe /platform:x64 /optimize+ /r:System.Drawing.dll /out:"${defaultExe}" "${csSource}"`,
             { cwd: path.dirname(defaultExe), timeout: 15000, stdio: ['pipe', 'pipe', 'ignore'] }
           );
           if (fs.existsSync(defaultExe)) {

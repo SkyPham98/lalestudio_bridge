@@ -122,7 +122,7 @@ if ($needsCompile -and (Test-Path $csSource)) {
     if (Test-Path $csc) {
         try {
             Write-Host " [INFO] Dang tu dong bien dich fuji_bridge.exe (64-bit)..." -ForegroundColor Cyan
-            $proc = Start-Process -FilePath $csc -ArgumentList "/target:exe /platform:x64 /optimize+ /out:`"$global:FujiBridgeExe`" `"$csSource`"" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
+            $proc = Start-Process -FilePath $csc -ArgumentList "/target:exe /platform:x64 /optimize+ /r:System.Drawing.dll /out:`"$global:FujiBridgeExe`" `"$csSource`"" -WorkingDirectory (Split-Path $global:FujiBridgeExe) -Wait -PassThru -NoNewWindow
             if ($proc.ExitCode -eq 0 -and (Test-Path $global:FujiBridgeExe)) {
                 Write-Host " [OK] Da tao thanh cong: fuji_bridge.exe (FUJIFILM SDK)" -ForegroundColor Green
             } else {
