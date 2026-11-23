@@ -22,6 +22,10 @@ if "%CSC_PATH%"=="" (
     exit /b 1
 )
 
+echo [INFO] Dang kiem tra va dung cac tien trinh fuji_bridge.exe dang chay neu co...
+taskkill /F /IM fuji_bridge.exe >nul 2>&1
+timeout /t 1 /nobreak >nul
+
 echo [INFO] Dang su dung trinh bien dich: %CSC_PATH%
 echo [INFO] Dang bien dich FujiBridge.cs -> fuji_bridge.exe (x64)...
 
