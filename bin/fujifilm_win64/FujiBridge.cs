@@ -69,12 +69,14 @@ namespace Lalestudio.FujifilmBridge
         public const int XSDK_RELEASE_S2 = 0x0300;
         public const int XSDK_RELEASE_S2_S1OFF = 0x0304;
         public const int XSDK_RELEASE_SHOOT_S1OFF = 0x0104;
+        public const int XSDK_RELEASE_CANCEL = 0x000F;
 
         // Release Modes Ex
         public const int XSDK_RELEASE_EX_S1_ON = 0x00010000;
         public const int XSDK_RELEASE_EX_S1_OFF = 0x00000001;
         public const int XSDK_RELEASE_EX_S2_ON = 0x00020000;
         public const int XSDK_RELEASE_EX_S2_OFF = 0x00000002;
+        public const int XSDK_RELEASE_EX_CANCEL = 0x00000010;
         public const int XSDK_RELEASE_EX_S2_ON_S2_OFF_S1_OFF = 0x00020003;
         public const int XSDK_RELEASE_EX_S1_ON_S2_ON_S2_OFF_S1_OFF = 0x00030003;
 
@@ -132,6 +134,21 @@ namespace Lalestudio.FujifilmBridge
         public bool IsLoaded { get { return _hModule != IntPtr.Zero; } }
         public bool IsConnected { get { return _hCamera != IntPtr.Zero; } }
         public string LastError { get; private set; }
+
+        public bool IsAlive()
+        {
+            if (_hCamera == IntPtr.Zero) return false;
+            if (_getDeviceInfoFn != null)
+            {
+                XSDK_DeviceInformation devInfo = new XSDK_DeviceInformation();
+                int ret = _getDeviceInfoFn(_hCamera, ref devInfo);
+                if (ret == XSDK_COMPLETE) return true;
+                Log(string.Format("[IS_ALIVE] May anh ngat ket noi hoac loi (ret={0}), tien hanh dong phien...", ret));
+                DisconnectCamera();
+                return false;
+            }
+            return _hCamera != IntPtr.Zero;
+        }
 
         public static void Log(string msg)
         {
@@ -329,42 +346,49 @@ namespace Lalestudio.FujifilmBridge
                 int curPrio = 0;
                 if (_getPriorityModeFn(_hCamera, ref curPrio) == XSDK_COMPLETE && curPrio == targetMode)
                 {
-                    Log(string.Format("[PRIORITY] Camera da o che do PC (PriorityMode=0x{0:X})", curPrio));
+                    Log(string.Format("[PRIORITY] Camera da o che do (0x{0:X})", curPrio));
                     return true;
                 }
             }
 
-            int lastRet = _setPriorityModeFn(_hCamera, targetMode);
-            if (lastRet == XSDK_COMPLETE)
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                Log("[PRIORITY] Thiet lap thanh cong quyen dieu khien PC (Ret=0)");
-                return true;
-            }
-
-            // Neu chua thanh cong, thu them 1 lan nua sau 10ms (khong loop blocking)
-            Thread.Sleep(10);
-            lastRet = _setPriorityModeFn(_hCamera, targetMode);
-            if (lastRet == XSDK_COMPLETE)
-            {
-                Log("[PRIORITY] Thiet lap thanh cong quyen dieu khien PC lan 2 (Ret=0)");
-                return true;
+                int lastRet = _setPriorityModeFn(_hCamera, targetMode);
+                if (lastRet == XSDK_COMPLETE)
+                {
+                    Log(string.Format("[PRIORITY] Thiet lap thanh cong quyen dieu khien 0x{0:X} (lan {1})", targetMode, attempt));
+                    return true;
+                }
+                Thread.Sleep(20);
             }
 
             int apiCode = 0, lastErr = 0;
             if (_getErrorNumberFn != null) _getErrorNumberFn(_hCamera, ref apiCode, ref lastErr);
-            Log(string.Format("[PRIORITY] Ghi chu: SetPriorityMode Ret={0}, ErrCode=0x{1:X} (Bo qua de ban man trap ngay lap tuc)",
-                lastRet, lastErr));
+            Log(string.Format("[PRIORITY] SetPriorityMode 0x{0:X} chua xac nhan (ErrCode=0x{1:X}), bo qua de tiep tuc...",
+                targetMode, lastErr));
             return false;
         }
 
         public void DisconnectCamera()
         {
-            if (_hCamera != IntPtr.Zero && _closeFn != null)
+            if (_hCamera != IntPtr.Zero)
             {
-                Log(string.Format("[DISCONNECT] Dong phien may anh Fujifilm Handle=0x{0:X}...", _hCamera.ToInt64()));
-                try { _closeFn(_hCamera); } catch { }
+                try
+                {
+                    int opt = 1, st = 0;
+                    if (_releaseFn != null) _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref opt, ref st);
+                    if (_releaseExFn != null) _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref opt, ref st);
+                    if (_setPriorityModeFn != null) _setPriorityModeFn(_hCamera, XSDK_PRIORITY_CAMERA);
+                }
+                catch { }
+
+                if (_closeFn != null)
+                {
+                    Log(string.Format("[DISCONNECT] Dong phien may anh Fujifilm Handle=0x{0:X}...", _hCamera.ToInt64()));
+                    try { _closeFn(_hCamera); } catch { }
+                }
                 _hCamera = IntPtr.Zero;
-                Thread.Sleep(300);
+                Thread.Sleep(200);
             }
         }
 
@@ -447,6 +471,25 @@ namespace Lalestudio.FujifilmBridge
                 _getErrorDetailsFn(_hCamera, ref details);
                 Log(string.Format("[FUJI CAPTURE STEP 1/6] Trang thai chi tiet truoc khi chup: 0x{0:X} ({1})", details, DecodeErrorDetails(details)));
             }
+
+            // [PRE-SHOOT CLEANUP] Dam bao khong con lenh release ton dong hoac anh ton trong bo dem tu lan chup truoc
+            try
+            {
+                int preOpt = 1, preSt = 0;
+                if (_releaseFn != null) _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref preOpt, ref preSt);
+                if (_releaseExFn != null) _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref preOpt, ref preSt);
+
+                if (_readImageInfoFn != null)
+                {
+                    XSDK_ImageInformation oldInfo = new XSDK_ImageInformation();
+                    if (_readImageInfoFn(_hCamera, ref oldInfo) == XSDK_COMPLETE && (oldInfo.lFormat & 0xFF) != XSDK_IMAGEFORMAT_NONE)
+                    {
+                        Log("[PRE-SHOOT] Phat hien anh cu con ton trong bo dem camera, tien hanh xoa...");
+                        if (_deleteImageFn != null) _deleteImageFn(_hCamera);
+                    }
+                }
+            }
+            catch { }
 
             // Dam bao may anh o quyen dieu khien PC (Kiem tra tuc thi 0ms)
             if (_setPriorityModeFn != null)
@@ -579,9 +622,39 @@ namespace Lalestudio.FujifilmBridge
                             int readRet = _readImageFn(_hCamera, ptr, (uint)imgInfo.lDataSize);
                             Log(string.Format("[FUJI CAPTURE STEP 6/6] Ket qua XSDK_ReadImage: Ret={0} (0 = Thanh cong)", readRet));
 
+                            // 1. Xoa anh khoi bo dem truyen du lieu USB cua may anh
                             if (_deleteImageFn != null)
                             {
                                 try { _deleteImageFn(_hCamera); } catch { }
+                            }
+
+                            // 2. Gui lenh XSDK_RELEASE_CANCEL de giai phong trang thai man trap (tranh loi 0x1008 o tam tiep theo)
+                            int cancelOpt = 1, cancelStatus = 0;
+                            if (_releaseFn != null)
+                            {
+                                try { _releaseFn(_hCamera, XSDK_RELEASE_CANCEL, ref cancelOpt, ref cancelStatus); } catch { }
+                            }
+                            if (_releaseExFn != null)
+                            {
+                                try { _releaseExFn(_hCamera, XSDK_RELEASE_EX_CANCEL, ref cancelOpt, ref cancelStatus); } catch { }
+                            }
+
+                            // 3. Dong bo bo dem the nho may anh (chuan theo Fujifilm SDK CameraControl.cpp: TerminateS2)
+                            // SetPriorityMode ve CAMERA cho den khi may anh ghi the xong
+                            Log("[FUJI CAPTURE STEP 6/6] Dong bo bo dem the nho may anh (SetPriorityMode -> CAMERA)...");
+                            if (_setPriorityModeFn != null)
+                            {
+                                DateTime startWaitBuf = DateTime.Now;
+                                while ((DateTime.Now - startWaitBuf).TotalMilliseconds < 2500)
+                                {
+                                    int pRet = _setPriorityModeFn(_hCamera, XSDK_PRIORITY_CAMERA);
+                                    if (pRet == XSDK_COMPLETE)
+                                    {
+                                        Log(string.Format("[FUJI CAPTURE STEP 6/6] Bo dem may anh da san sang ({0:0}ms)", (DateTime.Now - startWaitBuf).TotalMilliseconds));
+                                        break;
+                                    }
+                                    Thread.Sleep(30);
+                                }
                             }
 
                             if (readRet == XSDK_COMPLETE)
@@ -892,15 +965,14 @@ namespace Lalestudio.FujifilmBridge
             {
                 lock (sdk)
                 {
-                    XSDK_DeviceInformation devInfo;
-                    bool connected = sdk.IsConnected;
+                    XSDK_DeviceInformation devInfo = new XSDK_DeviceInformation();
+                    bool connected = sdk.IsAlive();
                     if (!connected)
                     {
                         connected = sdk.ConnectCamera(out devInfo);
                     }
                     else
                     {
-                        devInfo = new XSDK_DeviceInformation();
                         devInfo.strProduct = "FUJIFILM X-T4";
                     }
 
@@ -956,6 +1028,15 @@ namespace Lalestudio.FujifilmBridge
                     if (!Directory.Exists(saveDir))
                     {
                         try { Directory.CreateDirectory(saveDir); } catch { }
+                    }
+
+                    if (!sdk.IsAlive())
+                    {
+                        XSDK_DeviceInformation devInfo;
+                        if (!sdk.ConnectCamera(out devInfo))
+                        {
+                            throw new Exception("Khong the ket noi may anh Fujifilm: " + sdk.LastError);
+                        }
                     }
 
                     long startTime = Environment.TickCount;

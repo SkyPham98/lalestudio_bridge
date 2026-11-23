@@ -3,7 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 // Prevent unexpected process crashes on unhandled errors/rejections
 process.on('uncaughtException', (err) => {
@@ -373,6 +373,25 @@ function getFujiBridgeExe() {
   return null;
 }
 
+let fujiDaemonProcess = null;
+function startFujiDaemonIfNeeded() {
+  const fujiExe = getFujiBridgeExe();
+  if (!fujiExe || !fs.existsSync(fujiExe)) return;
+  if (fujiDaemonProcess && !fujiDaemonProcess.killed) return;
+
+  try {
+    console.log(`[Bridge Fuji] Tự động khởi động daemon trong nền: ${fujiExe} daemon 5514...`);
+    fujiDaemonProcess = spawn(fujiExe, ['daemon', '5514'], {
+      cwd: path.dirname(fujiExe),
+      detached: true,
+      stdio: 'ignore'
+    });
+    fujiDaemonProcess.unref();
+  } catch (err) {
+    console.warn(`[Bridge Fuji] Không thể khởi động daemon: ${err.message}`);
+  }
+}
+
 /**
  * Kiểm tra trạng thái máy ảnh Fujifilm qua Daemon HTTP (5514) hoặc fuji_bridge.exe CLI
  */
@@ -396,7 +415,9 @@ async function checkFujifilmStatus() {
         serverUrl: daemonUrl
       };
     }
-  } catch (e) { }
+  } catch (e) {
+    startFujiDaemonIfNeeded();
+  }
 
   // 2. Thử CLI fuji_bridge.exe status
   const fujiExe = getFujiBridgeExe();

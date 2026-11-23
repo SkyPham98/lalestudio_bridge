@@ -154,11 +154,51 @@ function Test-PortListening {
     return $false
 }
 
+# Ham khoi chay Fuji Daemon HTTP 5514 trong nen neu chua chay
+function Start-FujiDaemonIfNeeded {
+    if (Test-PortListening -Port 5514 -TimeoutMs 150) {
+        return $true
+    }
+    if ($global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
+        try {
+            Write-Host " [INFO] Dang tu dong khoi dong Fujifilm Bridge Daemon tren cong 5514..." -ForegroundColor Cyan
+            $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+            $pinfo.FileName = $global:FujiBridgeExe
+            $pinfo.Arguments = "daemon 5514"
+            $pinfo.WorkingDirectory = Split-Path $global:FujiBridgeExe
+            $pinfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            $pinfo.CreateNoWindow = $true
+            $pinfo.UseShellExecute = $true
+            [System.Diagnostics.Process]::Start($pinfo) | Out-Null
+
+            for ($i = 0; $i -lt 15; $i++) {
+                Start-Sleep -Milliseconds 100
+                if (Test-PortListening -Port 5514 -TimeoutMs 150) {
+                    Write-Host " [OK] Fujifilm Bridge Daemon da san sang tren cong 5514!" -ForegroundColor Green
+                    return $true
+                }
+            }
+        } catch {
+            Write-Host " [CANH BAO] Khong the khoi dong Daemon: $($_.Message)" -ForegroundColor Yellow
+        }
+    }
+    return $false
+}
+
+# Khoi dong Daemon ngay tu dau neu co file fuji_bridge.exe
+if (Test-Path $global:FujiBridgeExe) {
+    Start-FujiDaemonIfNeeded | Out-Null
+}
+
 # Cache driver may anh dang hoat dong de tranh tre (latency) khi chup
 $global:ActiveCameraDriver = $null
 
 # Ham kiem tra trang thai may anh Fujifilm (Daemon HTTP 5514 hoac fuji_bridge.exe CLI)
 function Find-FujifilmCamera {
+    if (-not (Test-PortListening -Port 5514 -TimeoutMs 150)) {
+        Start-FujiDaemonIfNeeded | Out-Null
+    }
+
     if (Test-PortListening -Port 5514 -TimeoutMs 150) {
         try {
             $check = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/status" -TimeoutSec 1 -ErrorAction Stop
@@ -717,17 +757,32 @@ while ($true) {
                                     Write-Host "[FUJI BRIDGE STEP 2 THONG BAO] Khong the chup qua Daemon 5514 ($fujiErrMsg). Chuyen sang goi truc tiep CLI..." -ForegroundColor Yellow
                                 }
                             } else {
-                                Write-Host "[FUJI BRIDGE STEP 2] Daemon 5514 chua khoi chay, goi truc tiep CLI..." -ForegroundColor Yellow
+                                Write-Host "[FUJI BRIDGE STEP 2] Daemon 5514 chua khoi chay, dang khoi dong..." -ForegroundColor Yellow
+                                if (Start-FujiDaemonIfNeeded) {
+                                    try {
+                                        Write-Host "[FUJI BRIDGE STEP 2/4] Goi Daemon HTTP (http://127.0.0.1:5514/api/capture)..." -ForegroundColor Cyan
+                                        $postBody = @{ orderCode = $orderCode; photoSaveDir = $PhotoDir; autoFocus = $true } | ConvertTo-Json
+                                        $fujiRes = Invoke-RestMethod -Uri "http://127.0.0.1:5514/api/capture" -Method POST -Body $postBody -ContentType "application/json" -TimeoutSec 15 -ErrorAction Stop
+                                        if ($fujiRes -and $fujiRes.success) {
+                                            $fujiCaptured = $fujiRes
+                                            Write-Host "[FUJI BRIDGE STEP 3/4] Daemon chup thanh cong! File: $($fujiRes.filename) ($($fujiRes.fileSizeMb))" -ForegroundColor Green
+                                        }
+                                    } catch {
+                                        $fujiErrMsg = $_.Exception.Message
+                                        Write-Host "[FUJI BRIDGE STEP 2 CANH BAO] Daemon loi: $fujiErrMsg" -ForegroundColor Yellow
+                                    }
+                                }
                             }
 
                             # 2. Neu Daemon chua chay hoac loi, goi truc tiep qua CLI fuji_bridge.exe
                             $fujiRawJson = $null
                             if (-not $fujiCaptured -and $global:FujiBridgeExe -and (Test-Path $global:FujiBridgeExe)) {
-                                # Giai phong bat ky tien trinh fuji_bridge nao dang chiem cong USB de tranh loi 0x1001 SEQUENCE
-                                $dangling = Get-Process -Name "fuji_bridge" -ErrorAction SilentlyContinue
-                                if ($dangling) {
-                                    $dangling | Stop-Process -Force -ErrorAction SilentlyContinue
-                                    Start-Sleep -Milliseconds 100
+                                if (-not (Test-PortListening -Port 5514 -TimeoutMs 100)) {
+                                    $dangling = Get-Process -Name "fuji_bridge" -ErrorAction SilentlyContinue
+                                    if ($dangling) {
+                                        $dangling | Stop-Process -Force -ErrorAction SilentlyContinue
+                                        Start-Sleep -Milliseconds 100
+                                    }
                                 }
 
                                 Write-Host "[FUJI BRIDGE STEP 2b] Khoi chay truc tiep CLI: $global:FujiBridgeExe capture..." -ForegroundColor Cyan
